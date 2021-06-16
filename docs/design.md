@@ -52,9 +52,11 @@ Filecoin, the shard key is the `PieceCID` of the storage deal.
 A shard contains:
 
 1. the shard key (identifier).
-2. the shard data (a CAR file).
+2. the shard data (a CAR file, which can be locally present or absent).
 3. the shard index (both acting as a manifest of the contents of the shard, and
    a means to efficiently perform random reads).
+
+### CAR formats
 
 A shard can be filled with CARv1 and CARv2 data. CARv2 can be indexed or
 indexless. This affects how the shard index is populated:
@@ -63,117 +65,139 @@ indexless. This affects how the shard index is populated:
 2. Indexless CARv2: the index is calculated upon shard activation.
 3. Indexed CARv2: the inline index is adopted as-is as the shard index.
 
-### CAR mounting
+### Shard states
 
-A key property for scaling the DAG store is CAR location independence and
-ephemerality.
+1. **Available:** the system knows about this shard and is capable of serving
+   data from it instantaneously, because (a) an index exists and is loaded, and
+   (b) data is locally accessible (e.g. it doesn't need to be fetched from a
+   remote mount).
+2. **Unavailable:** the system knows about this shard, but is not capable of
+   serving data from it because the shard is being initialized, or the mount is not available locally, but still accessible with work (e.g. fetching from a remote location).
+3. **Destroyed**: the shard is no longer available; this is permanent condition.
 
-CARs can be located anywhere, and can come and go dynamically (e.g. as removable
-media is attached/detached, Filecoin deals expire, or the IPFS user purges
-content).
+### Shard registration
+
+To register a new shard, call:
+
+```go
+dagst.RegisterShard(key []byte, mount Mount, opts ...RegisterOpts) error
+```
+
+1. This method takes a shard key and a `Mount`.
+2. It initializes the shard in `Unavailable` state.
+3. Calls `mount.Info()` to determine if the mount is of local or remote type.
+4. Calls `mount.Stat()` to determine if the mount target exists. If not, it
+   errors the registration.
+5. If remote, it fetches the remote resource into the scrap area.
+6. It determines the kind of CAR it is, and populates the index accordingly.
+7. Sets the state to `Available`.
+8. Returns.
+
+_RegisterOpts is an extension point._ In the future it can be used to pass in an
+unseal/decryption function to be used on access (e.g. such as when fast, random
+unseal is available).
+
+### Destroy shard
+
+To destroy a shard, call:
+
+```go
+dagst.DestroyShard(key []byte) (destroyed bool, err error)
+```
+
+### Other operations
+
+  * `[Pin/Unpin]Shard()`: retains the shard data in the local scrap area.
+  * `ReleaseShard()`: dispose of / release local scrap copies or other resources
+    on demand (e.g. unsealed copy).
+  * `[Lock/Unlock]Shard()`: for exclusive access.
+  * `[Incr/Decr]Shard()`: refcounting on shards.
+
+### Mounts
+
+Shards can be located anywhere, and can come and go dynamically e.g. Filecoin
+deals expire, removable media is attached/detached, or the IPFS user purges
+content.
 
 It is possible to mount shards with CARs accessible through the local
 filesystem, detachable mounts, NFS mounts, distributed filesystems like
 Ceph/GlusterFS, HTTP, FTP, etc.
 
-This versatility is provided by an abstraction called `Tether`, a pluggable
+This versatility is provided by an abstraction called `mount.Mount`, a pluggable
 component which encapsulates operations/logic to:
 
-1. `Load() (io.ReadCloser, error)` Load a CAR, optionally fetching it from a
-   remote location into a scrap area.
-2. `Accessible() (bool, error)` Test whether the CAR is accessible locally and
-   at origin (used to determine if the shard is mounted or unmounted).
-3. Transform the origin CAR on access (e.g. by performing an unseal operation).
-4. `Dispose() (bool, error)` Dispose of / release local scrap copies or other
-   resources on demand (e.g. unsealed copy). This is invoked when unmounting or
-   destroying the shard.
+1. `Fetch() (io.ReadCloser, error)` Load a CAR from its origin.
+2. `Info() mount.Info` Provides info about the mount, e.g. whether it's local or
+   remote. This is used to determine whether the fetched CAR needs to be copied
+   to a scrap area.
+3. `Stat() (mount.Stat, error)` Equivalent to a filesystem stat, provides
+   information about the target of the mount: whether it exists, size, etc.
 
-When instantiating Tether implementations, one can provide credentials, access
-tokens, or other parameters through constructors. This is necessary if access to
-the CAR is permissioned/authenticated.
+When instantiating `Mount` implementations, one can provide credentials, access
+tokens, or other parameters through the implementation constructors. This is
+necessary if access to the CAR is permissioned/authenticated.
 
-**Local filesystem Tether implementation**
+**Local filesystem Mount**
 
-A local filesystem `Tether` implementation loads the CAR directly from the
-filesystem file, and would utilise no scrap area. The test would consist of a
-simple `os.Stat()` operation. The disposal would noop, as no temporary resources
-are used.
+A local filesystem `Mount` implementation loads the CAR directly from the
+filesystem file. It is of `local` type and therefore requires no usage of scrap area.
 
-*This `Tether` is provided out-of-box by the DAG store.*
+*This `Mount` is provided out-of-box by the DAG store.*
 
-**Lotus Tether implementation**
+**Lotus Mount implementation**
 
-A Lotus `Tether` implementation would be instantiated with a sector ID and a
+A Lotus `Mount` implementation would be instantiated with a sector ID and a
 bytes range within the sealed sector file (i.e. the deal segment).
 
 Loading the CAR consists of calling the worker HTTP API to fetch the unsealed
-piece into a local scrap area. Currently, this may lead to actual unsealing on
+piece. Because the mount is of `remote` type, the DAG store will need to store it in a local scrap area. Currently, this may lead to actual unsealing on
 the Lotus worker cluster through the current PoRep (slow) if the piece is
 sealed.
 
 With a future PoRep (cheap, snappy) PoRep, sealing can be performed _just_ for
-the blocks that are effectively accessed, during access time. Thus, the
-unsealing operation would be called **in the DAG store** as an on-access
-transformation, and not on the Lotus worker cluster.
+the blocks that are effectively accessed, potentially during IPLD block access
+time. A transformation function may be provided in the future as a
+`RegisterOpt`.
 
-*This `Tether` is provided by Lotus, as it's implementation specific.*
+*This `Mount` is provided by Lotus, as it's implementation specific.*
 
-# RAW CONTENT (WIP)
+## Shard representation and persistence
 
-### Shard states
+The shard catalogue needs to survive restarts. Thus, it needs to be persistent.
+Options to explore here include LMDB, BoltDB, or others. Here's what the persisted shard entry could look like:
 
-3. Shards are like data cartridges that come and go. A shard can be:
-   1. Active: the system knows about this shard and is fully capable of
-      serving data from it instantaneously, because the CAR is immediately
-      accessible (e.g. it doesn't need to be fetched from a remote location,
-      nor has it been inactivated), and an index exists (either embedded in the CAR
-      or as an external artefact).
-   2. Inactive: the system knows about this shard, but is not capable of serving
-      data from it because the shard is still being initialized (fetched from
-      its location, or its index calculated if it's a CARv1 or an indexed CARv2),
-      or it is gone (e.g.the CAR has been deleted). However, if the shard is
-      reactivated (the CAR is brought back in, such as via unsealing), data can
-      be served immediately.
-   3. Destroyed: the shard is no longer available permanently.
+```go
+type PersistedShard struct {
+   Key   []byte
+   // Mount is a URL representation of the Mount, e.g.
+   //   file://path/to/file?opt=1&opt=2
+   //   lotus://sectorID?offset=1&length=2
+   Mount string
+   // LocalPath is the path to the local replica of the CAR in the scrap area, 
+   // if the mount if of remote type.
+   LocalPath string
+}
+```
 
-Synchronous activation
+Upon starting, the DAG store will load the catalogue from disk and will reinstantiate the shard catalogue, the mounts, and the shard states.
 
-1. fetch the CAR from its location
-2. subject it to a transformation (e.g. unsealing)
-3. dispose of the CAR
+---
 
-In Lotus, the `Fetcher` is responsible for fetching the deal CAR from workers and 
-
-Local paths are currently prioritised over other forms. It is presumed
-     that networked FS will be mounted to local paths.
-   - The fetching of the CAR resource is done via a Getter abstraction that
-     returns an io.ReadCloser.
-1. A shard initially created with an indexed CARv2 (e.g. a new deal transfer)
-   can be deactivated (e.g. such if the unsealed copy is deleted) and later
-   reactivated with a CARv1 equivalent (unsealed from sealed sector), without
-   index recreation.
-   - This is possible because the original index is stored in the index repo and
-     can be joined with the CARv1 copy.
-
-
-### Interaction with sealed sectors
-
-1. The DAG store does not manage unsealing. When a piece has to be unsealed,
-   to serve a deal, the unsealer must reactivate the shard with the unsealed
-   CARv1, which can be supplied as a slice (offset + length) of an unsealed
-   sector. The DAG store will recover the index from the index repo.
+# RAW CONTENT 🐉
 
 ## Index repository
 
 1. Stores different types of indices, always associated with a shard.
    - full shard indices: protected, not writable externally, managed entirely by
-     the storage layer. { CID: offset } mappings.
+     the storage layer { CID: offset } mappings.
    - semantic indices: supplied externally (by markets/indexing process).
-     CID manifests.
+     They are really CID manifests.
    - other indices in the future?
-2. Semantic indices don't belong here.
-3. Ultimately serves network indexer requests. These requests come in through the
-   markets/indexing process, and arrive here.
+2. Semantic indices are really not indices, they are manifests. Maybe they don't
+   belong here, but they need to be somewhere, and this is a good place to
+   incubate them and potentially spin them off in the future.
+3. Ultimately serves network indexer requests. These requests come in through
+   the markets/indexing process, and arrive here.
 4. In the future, will manage the cross-shard top-level index, and thus will
    serve as a shard routing mechanism.
 
@@ -187,7 +211,7 @@ Local paths are currently prioritised over other forms. It is presumed
    1. Obtaining a Blockstore bound to a single shard.
    2. Obtaining a Blockstore bound to a specific set of shards.
    3. Obtaining a global Blockstore.
-   4. 
+   4. ...
 
 ## Requirements for CARv2
 
@@ -196,7 +220,7 @@ Local paths are currently prioritised over other forms. It is presumed
   physical CARv2 file.
 - Index needs to be iterable.
 
-## Brainstorm
+## TODO
 
 Refcounts CARv1
 PoRep unseal on demand.
