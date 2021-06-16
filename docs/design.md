@@ -3,19 +3,33 @@
 ## Overview
 
 The purpose of the CARv2 + DAG store endeavour is to eliminate overhead from the
-deal-making processes with the mission of unlocking scalability, performance, and resource frugality on both miner and client side within the Filecoin network.
+deal-making processes with the mission of unlocking scalability, performance,
+and resource frugality on both miner and client side within the Filecoin
+network.
 
-Despite serving Lotus/Filecoin immediate needs, we envision the DAG store to be a common interplanetary building block across IPFS, Filecoin, and IPLD-based projects.
+Despite serving Lotus/Filecoin immediate needs, we envision the DAG store to be
+a common interplanetary building block across IPFS, Filecoin, and IPLD-based
+projects.
 
-The scalability of the former two is bottlenecked by the usage of Badger as a monolithic blockstore. The DAG store represents an alternative that leverages sharding and the concept of detachable "data cartridges" to feed and manage data as transactional units.
+The scalability of the former two is bottlenecked by the usage of Badger as a
+monolithic blockstore. The DAG store represents an alternative that leverages
+sharding and the concept of detachable "data cartridges" to feed and manage data
+as transactional units.
 
-For the project that immediately concerns us, the definition of done is the removal of the Badger blockstore from all client and miner codepaths involved in storage and retrieval deals, and the transition towards interfacing directly with low-level data repository files known as CARs (Content ARchives), on both the read and the write sides.
+For the project that immediately concerns us, the definition of done is the
+removal of the Badger blockstore from all client and miner codepaths involved in
+storage and retrieval deals, and the transition towards interfacing directly
+with low-level data repository files known as CARs (Content ARchives), on both
+the read and the write sides.
 
 Note that Badger is generally a fitting database for write-intense and
 iterator-heavy workloads. It just doesn't withstand the pattern of usage we
-subject it to in large IPLD-based software components, especially past the 100s GBs data volume mark.
+subject it to in large IPLD-based software components, especially past the 100s
+GBs data volume mark.
 
-For more information on motivation and architecture, please refer to [CAR-native DAG store](https://docs.google.com/document/d/118fJdf8HGK8tHYOCQfMVURW9gTF738D0weX-hbG-BvY/edit#). This document is recommended as a pre-read.
+For more information on motivation and architecture, please refer to
+[CAR-native DAG store](https://docs.google.com/document/d/118fJdf8HGK8tHYOCQfMVURW9gTF738D0weX-hbG-BvY/edit#). This document is 
+recommended as a pre-read.
 
 ## Overview
 
@@ -27,20 +41,23 @@ The DAG store comprises three layers:
 
 ## Storage layer
 
-The DAG store holds shards of data. In Filecoin, shard = deal. Each shard is a repository of data capable of acting as a standalone blockstore.
+The DAG store holds shards of data. In Filecoin, shard = deal. Each shard is a
+repository of data capable of acting as a standalone blockstore.
 
 ### Shards
 
-Shards are identified by an opaque byte string: the shard key. In the case
-of Filecoin, the shard key is the `PieceCID` of the storage deal.
+Shards are identified by an opaque byte string: the shard key. In the case of
+Filecoin, the shard key is the `PieceCID` of the storage deal.
 
 A shard contains:
 
 1. the shard key (identifier).
 2. the shard data (a CAR file).
-3. the shard index (both acting as a manifest of the contents of the shard, and a means to efficiently perform random reads).
+3. the shard index (both acting as a manifest of the contents of the shard, and
+   a means to efficiently perform random reads).
 
-A shard can be filled with CARv1 and CARv2 data. CARv2 can be indexed or indexless. This affects how the shard index is populated:
+A shard can be filled with CARv1 and CARv2 data. CARv2 can be indexed or
+indexless. This affects how the shard index is populated:
 
 1. CARv1: the index is calculated upon shard activation.
 2. Indexless CARv2: the index is calculated upon shard activation.
@@ -48,34 +65,56 @@ A shard can be filled with CARv1 and CARv2 data. CARv2 can be indexed or indexle
 
 ### CAR mounting
 
-A key property for scaling the DAG store is CAR location independence and ephemerality.
+A key property for scaling the DAG store is CAR location independence and
+ephemerality.
 
-CARs can be located anywhere, and can come and go dynamically (e.g. as removable media is attached/detached, Filecoin deals expire, or the IPFS user purges content).
+CARs can be located anywhere, and can come and go dynamically (e.g. as removable
+media is attached/detached, Filecoin deals expire, or the IPFS user purges
+content).
 
-It is possible to mount shards with CARs accessible through the local filesystem, detachable mounts, NFS mounts, distributed filesystems like Ceph/GlusterFS, HTTP, FTP, etc.
+It is possible to mount shards with CARs accessible through the local
+filesystem, detachable mounts, NFS mounts, distributed filesystems like
+Ceph/GlusterFS, HTTP, FTP, etc.
 
-This versatility is provided by an abstraction called `Tether`, a pluggable component which encapsulates operations/logic to:
+This versatility is provided by an abstraction called `Tether`, a pluggable
+component which encapsulates operations/logic to:
 
-1. `Load() (io.ReadCloser, error)` Load a CAR, optionally fetching it from a remote location into a scrap area.
-2. `Accessible() (bool, error)` Test whether the CAR is accessible locally and at origin (used to determine if the shard is mounted or unmounted).
+1. `Load() (io.ReadCloser, error)` Load a CAR, optionally fetching it from a
+   remote location into a scrap area.
+2. `Accessible() (bool, error)` Test whether the CAR is accessible locally and
+   at origin (used to determine if the shard is mounted or unmounted).
 3. Transform the origin CAR on access (e.g. by performing an unseal operation).
-4. `Dispose() (bool, error)` Dispose of / release local scrap copies or other resources on demand (e.g. unsealed copy). This is invoked when unmounting or destroying the shard.
+4. `Dispose() (bool, error)` Dispose of / release local scrap copies or other
+   resources on demand (e.g. unsealed copy). This is invoked when unmounting or
+   destroying the shard.
 
-When instantiating Tether implementations, one can provide credentials, access tokens, or other parameters through constructors. This is necessary if access to the CAR is permissioned/authenticated.
+When instantiating Tether implementations, one can provide credentials, access
+tokens, or other parameters through constructors. This is necessary if access to
+the CAR is permissioned/authenticated.
 
 **Local filesystem Tether implementation**
 
-A local filesystem `Tether` implementation loads the CAR directly from the filesystem file, and would utilise no scrap area. The test would consist of a simple `os.Stat()` operation. The disposal would noop, as no temporary resources are used.
+A local filesystem `Tether` implementation loads the CAR directly from the
+filesystem file, and would utilise no scrap area. The test would consist of a
+simple `os.Stat()` operation. The disposal would noop, as no temporary resources
+are used.
 
 *This `Tether` is provided out-of-box by the DAG store.*
 
 **Lotus Tether implementation**
 
-A Lotus `Tether` implementation would be instantiated with a sector ID and a bytes range within the sealed sector file (i.e. the deal segment).
+A Lotus `Tether` implementation would be instantiated with a sector ID and a
+bytes range within the sealed sector file (i.e. the deal segment).
 
-Loading the CAR consists of calling the worker HTTP API to fetch the unsealed piece into a local scrap area. Currently, this may lead to actual unsealing on the Lotus worker cluster through the current PoRep (slow) if the piece is sealed.
+Loading the CAR consists of calling the worker HTTP API to fetch the unsealed
+piece into a local scrap area. Currently, this may lead to actual unsealing on
+the Lotus worker cluster through the current PoRep (slow) if the piece is
+sealed.
 
-With a future PoRep (cheap, snappy) PoRep, sealing can be performed _just_ for the blocks that are effectively accessed, during access time. Thus, the unsealing operation would be called **in the DAG store** as an on-access transformation, and not on the Lotus worker cluster.
+With a future PoRep (cheap, snappy) PoRep, sealing can be performed _just_ for
+the blocks that are effectively accessed, during access time. Thus, the
+unsealing operation would be called **in the DAG store** as an on-access
+transformation, and not on the Lotus worker cluster.
 
 *This `Tether` is provided by Lotus, as it's implementation specific.*
 
