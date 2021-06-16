@@ -75,7 +75,9 @@ indexless. This affects how the shard index is populated:
    serving data from it because the shard is being initialized, or the mount is not available locally, but still accessible with work (e.g. fetching from a remote location).
 3. **Destroyed**: the shard is no longer available; this is permanent condition.
 
-### Shard registration
+### Operations
+
+#### Shard registration
 
 To register a new shard, call:
 
@@ -97,7 +99,7 @@ _RegisterOpts is an extension point._ In the future it can be used to pass in an
 unseal/decryption function to be used on access (e.g. such as when fast, random
 unseal is available).
 
-### Destroy shard
+#### Shard destruction
 
 To destroy a shard, call:
 
@@ -105,7 +107,7 @@ To destroy a shard, call:
 dagst.DestroyShard(key []byte) (destroyed bool, err error)
 ```
 
-### Other operations
+#### Other operations
 
   * `[Pin/Unpin]Shard()`: retains the shard data in the local scrap area.
   * `ReleaseShard()`: dispose of / release local scrap copies or other resources
@@ -161,7 +163,7 @@ time. A transformation function may be provided in the future as a
 
 *This `Mount` is provided by Lotus, as it's implementation specific.*
 
-## Shard representation and persistence
+### Shard representation and persistence
 
 The shard catalogue needs to survive restarts. Thus, it needs to be persistent.
 Options to explore here include LMDB, BoltDB, or others. Here's what the persisted shard entry could look like:
@@ -180,6 +182,21 @@ type PersistedShard struct {
 ```
 
 Upon starting, the DAG store will load the catalogue from disk and will reinstantiate the shard catalogue, the mounts, and the shard states.
+
+### Scrap area
+
+When dealing with remote mounts (e.g. Filecoin storage cluster), the DAG store
+will need to copy the remote CAR into local storage to be able to serve DAG
+access queries.
+
+Readers access shards from the storage layer by calling
+`Acquire/ReleaseShard(key []byte)` methods, which drive the copies into scrap
+storage and the deletion of resources.
+
+These methods will need to do refcounting. When no readers are accessing a
+shard, the DAG store is free to release local resources. In a first version,
+this may happen instantly. In future versions, we may introduce some active
+management of the scrap area through usage monitoring + GC. Storage space assigned to the scrap area may by configuration in the future.
 
 ---
 
