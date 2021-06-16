@@ -11,7 +11,12 @@ import (
 // how to dispose transient files/artefacts etc produced as part of retrieval queries.
 // This abstraction simply returns a raw byte stream. It is the caller's responsibility to determine the CAR version and parse the CAR file.
 type DAGCarFetcher interface {
-	Fetch(ctx context.Context) (io.ReadCloser, error)
+	FetchCAR(ctx context.Context) (io.ReadCloser, error)
+
+	// TODO: The user might want to indicate from where the Index should be fetched if it already has one.
+	// For eg: If the user has a CARV2 but the `FetchCAR` call above only returns a CARv1 payload in filecoin.
+	// The the user can configure FetchIndex to return the CARv2 Index byte slice.
+	FetchIndex(ctx context.Context) (io.ReadCloser, error)
 
 	// called by the DAG Store to determine if this shard is still active
 	// for eg: Is the USB still unplugged ? Is the storage deal active ?
