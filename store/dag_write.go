@@ -7,9 +7,9 @@ import (
 
 // DAGCarFetcher allows a caller to read a CAR for a DAG.
 // This abstraction enables the DAG store to fetch and stream a DAG CAR from any source.
+// It also instructs the DAG Store how to determine if a particular shard is active so as to prevent duplicate activations and
+// how to dispose transient files/artefacts etc produced as part of retrieval queries.
 // This abstraction simply returns a raw byte stream. It is the caller's responsibility to determine the CAR version and parse the CAR file.
-// TODO: Should we use an `io.ReaderAt` here instead of an `io.Reader` to serve random access queries directly out of the
-//	 //  source instead of having to duplicate it ?
 type DAGCarFetcher interface {
 	Fetch(ctx context.Context) (io.ReadCloser, error)
 

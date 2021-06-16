@@ -25,7 +25,7 @@ type DAGRead interface {
 // ReadOnlyBlockStore allows clients to stream the raw block data for a given Cid.
 // It is the client's responsibility to call Close once the reads are done.
 // TODO The current idea is to have a Close function that will clean up
-// the CAR file fetched from source/artefacts produced or copied as a part of creating the block store wrapper interface.
+//  //  the CAR file fetched from source/artefacts produced or copied as a part of creating the block store wrapper interface etc.
 type ReadOnlyBlockStore interface {
 	Get(c cid.Cid) (io.Reader, error)
 	Close() error

@@ -1,5 +1,7 @@
 package index
 
+// TODO: We probably don't need to export this. It's only for the internal usage of the DAG Store.
+
 import (
 	"io"
 
@@ -33,7 +35,6 @@ type FullShardIndexFetcher interface {
 	Fetch() (io.ReadCloser, error)
 }
 
-// TODO: We probably don't need to export this. It's only for the internal usage of the DAG Store.
 // FullShardIndexStore manages and allows access to the Full Indices built on top of the shards managed by the Sharded DAG Store.
 type FullShardIndexStore interface {
 	// AddFullShardIndex adds a full shard Index for the sharded DAG with the given shard key to the Store.
