@@ -195,6 +195,14 @@ Local paths are currently prioritised over other forms. It is presumed
 - Index offsets need to be relative to the CARv1, and not absolute in the
   physical CARv2 file.
 - Index needs to be iterable.
+- Given a CARv2 file, we should be able to decompose it to the corresponding Carv1 payload and the Index.
+- Given a Carv1 file, we need to get it's Index.
+- Given a CARv2 file, we want a ReadOnlyBlockstore on top of it.  
+- Given a CARv1 file and it's Index, we want a ReadOnlyBlockstore wrapper on top if it.
+- We want a ReadWrite blockstore interface that can give us a CarV2 file when we commit. This is important for Graphsync.  
+    Need to flesh out whether we can write arbitary IPLD blocks or whether only coherent DAGs based on (root, selector) combo are allowed.
+- We should be able to read the leading N bytes of a CAR file and determine if it's a CARv1 or a Carv2.
+- TODO: Give a thought to the CommP calculation on both sides in the storage deal -> is probably covered by the requirements above.
 
 ## Brainstorm
 
