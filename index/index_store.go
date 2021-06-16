@@ -4,7 +4,7 @@ package index
 type IndexStore interface {
 	FullShardIndexStore
 
-	// TODO: Semantic Indexing
+	// TODO: Semantic Indexing -> Does it even belong here ? Dosen't help the DAG Store with serving retrievals.
 	// TODO: Cross Shard Indexing
 	// ...
 }

@@ -24,18 +24,22 @@ type DAGCarFetcher interface {
 // DAGWrite is the write side of te sharded DAG store.
 type DAGWrite interface {
 	// AddShard adds a sharded DAG with the given shard key that can be streamed and fetched using the given fetcher to the DAG store.
-	// TODO When is the Index created ?
-	// 	// Should we give users the option to create it at write time for fast reads later or create it lazily during the first read ?
-	//  // Do we already have a memoize Index for the shard ? If yes, nothong to do, Else
-	//  // Inspect the given CAR file to know if it already has an Index ? If yes, memoize it or else ask go-car to create one for us
-	// 	// and memoize it so we don't need to create it again.
+	// It will create and persist an Index for the shard if it dosen't already have an Index for the sharded DAG with the given shard key.
+	//
+	// Implementation Notes:
+	//  Do we already have an Index for the shard ? If yes, no Indexing to do, Else
+	//  Inspect the given CAR file to know if it already has an Index ? If yes, memoize it or else ask go-car to create one for us
+	// 	and memoize it so we don't need to create it again.
 	ActivateShard(shard_key string, fetcher DAGCarFetcher) error
 
-	// TODO Need to replace the above with this
+	// TODO Need to replace the above `ActivateShard` with this:
 	// Atomic get and set.
-	ActivateShardIfNotActive(shard_key string, fetcher DAGCarFetcher) error
+	// ActivateShardIfNotActive will activate the shard and index it if it's NOT already active.
+	// This will be a no-op if the shard is already active.
+	// Will return true if the shard was newly activated by this call, false if it was already activated.
+	ActivateShardIfNotActive(shard_key string, fetcher DAGCarFetcher) (bool, error)
 
 	// RemoveShard removes the sharded DAG with the given shard key from the DAG store.
 	// If dropIndices is set to true, it will also drop all associated indices.
-	RemoveShard(shard_key string, dropIndices bool)
+	RemoveShard(shard_key string, dropIndices bool) error
 }

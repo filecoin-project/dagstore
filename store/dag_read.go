@@ -12,8 +12,6 @@ type DAGStore interface {
 }
 
 // DAGRead defines the interface for reading DAGs from the sharded DAG store.
-// TODO The current idea is for the output types to have a Close function that will clean up
-// the CAR file fetched from source
 type DAGRead interface {
 	// GetShardReadOnlyBlockstore returns a ReadOnlyBlockStore that allows random read-only lookups
 	// in the form of {cid: raw block data} for the sharded DAG with the given shard key.
@@ -26,6 +24,8 @@ type DAGRead interface {
 
 // ReadOnlyBlockStore allows clients to stream the raw block data for a given Cid.
 // It is the client's responsibility to call Close once the reads are done.
+// TODO The current idea is to have a Close function that will clean up
+// the CAR file fetched from source/artefacts produced or copied as a part of creating the block store wrapper interface.
 type ReadOnlyBlockStore interface {
 	Get(c cid.Cid) (io.Reader, error)
 	Close() error
