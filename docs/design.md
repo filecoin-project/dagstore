@@ -52,14 +52,18 @@ Filecoin, the shard key is the `PieceCID` of the storage deal.
 A shard contains:
 
 1. the shard key (identifier).
-2. the shard data (a CAR file, which can be locally present or absent).
+2. the means to obtain shard data (a `Mount` that provides the CAR either
+   locally, remotely, or some other location).
 3. the shard index (both acting as a manifest of the contents of the shard, and
    a means to efficiently perform random reads).
 
 ### CAR formats
 
 A shard can be filled with CARv1 and CARv2 data. CARv2 can be indexed or
-indexless. This affects how the shard index is populated:
+indexless.
+
+The choice of version and characteristics affects how the shard index is
+populated:
 
 1. CARv1: the index is calculated upon shard activation.
 2. Indexless CARv2: the index is calculated upon shard activation.
@@ -72,7 +76,9 @@ indexless. This affects how the shard index is populated:
    (b) data is locally accessible (e.g. it doesn't need to be fetched from a
    remote mount).
 2. **Unavailable:** the system knows about this shard, but is not capable of
-   serving data from it because the shard is being initialized, or the mount is not available locally, but still accessible with work (e.g. fetching from a remote location).
+   serving data from it because the shard is being initialized, or the mount is
+   not available locally, but still accessible with work (e.g. fetching from a
+   remote location).
 3. **Destroyed**: the shard is no longer available; this is permanent condition.
 
 ### Operations
@@ -94,6 +100,10 @@ dagst.RegisterShard(key []byte, mount Mount, opts ...RegisterOpts) error
 6. It determines the kind of CAR it is, and populates the index accordingly.
 7. Sets the state to `Available`.
 8. Returns.
+
+This method is _synchronous_. It returns only when the shard is fully indexed
+and available for serving data. This embodies the consistency property of the
+ACID model, whereby an INSERT is immediately queriable upon return.
 
 _RegisterOpts is an extension point._ In the future it can be used to pass in an
 unseal/decryption function to be used on access (e.g. such as when fast, random
@@ -142,7 +152,8 @@ necessary if access to the CAR is permissioned/authenticated.
 **Local filesystem Mount**
 
 A local filesystem `Mount` implementation loads the CAR directly from the
-filesystem file. It is of `local` type and therefore requires no usage of scrap area.
+filesystem file. It is of `local` type and therefore requires no usage of scrap
+area.
 
 *This `Mount` is provided out-of-box by the DAG store.*
 
@@ -152,21 +163,26 @@ A Lotus `Mount` implementation would be instantiated with a sector ID and a
 bytes range within the sealed sector file (i.e. the deal segment).
 
 Loading the CAR consists of calling the worker HTTP API to fetch the unsealed
-piece. Because the mount is of `remote` type, the DAG store will need to store it in a local scrap area. Currently, this may lead to actual unsealing on
-the Lotus worker cluster through the current PoRep (slow) if the piece is
-sealed.
+piece. Because the mount is of `remote` type, the DAG store will need to store
+it in a local scrap area. Currently, this may lead to actual unsealing on the
+Lotus worker cluster through the current PoRep (slow) if the piece is sealed.
 
 With a future PoRep (cheap, snappy) PoRep, sealing can be performed _just_ for
 the blocks that are effectively accessed, potentially during IPLD block access
-time. A transformation function may be provided in the future as a
-`RegisterOpt`.
+time. A transformation function may be provided in the future as a `RegisterOpt`
+that conducts the unsealing.
+
+A prerequisite to enable unsealing-on-demand possible is PoRep and index
+symmetry, i.e. the byte positions of blocks in the unsealed CAR must be
+identical to those in the unsealed CAR.
 
 *This `Mount` is provided by Lotus, as it's implementation specific.*
 
 ### Shard representation and persistence
 
 The shard catalogue needs to survive restarts. Thus, it needs to be persistent.
-Options to explore here include LMDB, BoltDB, or others. Here's what the persisted shard entry could look like:
+Options to explore here include LMDB, BoltDB, or others. Here's what the
+persisted shard entry could look like:
 
 ```go
 type PersistedShard struct {
@@ -181,13 +197,14 @@ type PersistedShard struct {
 }
 ```
 
-Upon starting, the DAG store will load the catalogue from disk and will reinstantiate the shard catalogue, the mounts, and the shard states.
+Upon starting, the DAG store will load the catalogue from disk and will
+reinstantiate the shard catalogue, the mounts, and the shard states.
 
 ### Scrap area
 
 When dealing with remote mounts (e.g. Filecoin storage cluster), the DAG store
 will need to copy the remote CAR into local storage to be able to serve DAG
-access queries.
+access queries. These copies are called _transient copies_.
 
 Readers access shards from the storage layer by calling
 `Acquire/ReleaseShard(key []byte)` methods, which drive the copies into scrap
@@ -196,39 +213,120 @@ storage and the deletion of resources.
 These methods will need to do refcounting. When no readers are accessing a
 shard, the DAG store is free to release local resources. In a first version,
 this may happen instantly. In future versions, we may introduce some active
-management of the scrap area through usage monitoring + GC. Storage space assigned to the scrap area may by configuration in the future.
-
----
-
-# RAW CONTENT 🐉
+management of the scrap area through usage monitoring + GC. Storage space
+assigned to the scrap area may by configuration in the future.
 
 ## Index repository
 
-1. Stores different types of indices, always associated with a shard.
-   - full shard indices: protected, not writable externally, managed entirely by
-     the storage layer { CID: offset } mappings.
-   - semantic indices: supplied externally (by markets/indexing process).
-     They are really CID manifests.
-   - other indices in the future?
-2. Semantic indices are really not indices, they are manifests. Maybe they don't
-   belong here, but they need to be somewhere, and this is a good place to
-   incubate them and potentially spin them off in the future.
-3. Ultimately serves network indexer requests. These requests come in through
-   the markets/indexing process, and arrive here.
-4. In the future, will manage the cross-shard top-level index, and thus will
-   serve as a shard routing mechanism.
+The index repository is the subcomponent that owns and manages the indices in
+the DAG store.
+
+There exists three kinds of indices:
+
+1. **Full shard indices.** Consisting of `{ CID: offset }` mappings. In indexed
+   CARv2, these are extracted from the inline indices. In unindexed CARv2 and
+   CARv1, these are computed using the [Carbs library](https://github.com/willscott/carbs), or the CARv2 upgrade path.
+   
+   Full shard indices are protected, and not writable externally. Every
+   available/unavailable shard MUST have a full shard index. Upon shard
+   destruction, its associated full shard index can be disposed.
+   
+2. **Semantic indices.** Manifests of externally-relevant CIDs contained within
+   a shard, i.e. `[]CID` with no offset indication. In other words, subsets of
+   the full-shard index with no offset indication.
+   
+   These are calculated externally (e.g. semantic indexing service) and supplied
+   to the DAG store for storage and safekeeping.
+
+   A shard can have infinite number of semantic indices associated with it. Each
+   semantic index is identifid and stamped with its generation data (rule and
+   version).
+
+   We acknowledge that semantic indices perhaps don't belong in the DAG store
+   long-term. Despite that, we decide to incubate them here to potentially spin
+   them off in the future.
+
+3. **Top-level cross-shard index.** Aggregates of full shard indices that enable
+   shard routing of reads for concrete CIDs.
+
+### Interactions
+
+This component receives the queries coming in from the miner-side indexing
+sidecar, which in turn come from network indexers.
+
+It also serves the DAG access layer. When a shard is registered/acquired in the
+storage layer, and a Blockstore is demanded for it, the full index to provide
+random-access capability is obtained from the index repo.
+
+In the future, this subcomponent will also serve the top-level cross-shard
+index.
+
+### Interface
+
+```go
+type IndexRepo interface {
+   FullIndexRepo
+   ManifestRepo
+}
+
+type FullIndexRepo interface {
+   // public
+   GetFullIndex(key shard.Key) (FullIndex, error)
+
+   // private
+   InsertFullIndex(key shard.Key, index FullIndex) error
+   DeleteFullIndex(key shard.Key) (bool, error)
+}
+
+type ManifestRepo interface {
+   // public
+   GetManifest(key ManifestKey) (Manifest, error)
+   InsertManifest(key ManifestKey, manifest Manifest) error
+   DeleteManifest(key ManifestKey) (bool, error)
+   ExistsManifest(key ManifestKey) (bool, error)
+}
+
+type ManifestKey struct {
+   Shard    key.Shard
+   Rule     string
+   Version  string
+}
+
+type FullIndex interface {
+   Offset(c cid.Cid) (offset int64, err error) // inexistent: offset=-1, err=nil
+   Contains(c cid.Cid) (bool, error)
+   Len() (l int64, err error)
+   ForEach(func(c cid.Cid, offset int64) (ok bool, err error)) error
+}
+```
 
 ## DAG access layer
 
-1. Responsible for serving DAGs or sub-DAGs from one or many shards.
-   Initially, queries will require the shard key.
-2. In the future, when the cross-shard top-level index is implemented, the
-   DAG store will be capable for resolving the shard key for a given root CID.
-3. DAG access layer allows various access strategies:
+This layer is responsible for serving DAGs or sub-DAGs from one or many shards.
+Initially, queries will require the shard key. That is, queries will be bounded
+to a single identifiable shard.
+
+In the future, when the cross-shard top-level index is implemented, the DAG
+store will be capable of resolving the shard for any given root CID.
+
+DAG access layer allows various access abstractions:
    1. Obtaining a Blockstore bound to a single shard.
    2. Obtaining a Blockstore bound to a specific set of shards.
    3. Obtaining a global Blockstore.
-   4. ...
+   4. `ipld.Node` -- TBD.
+
+At this point, we are only concerned with (1). The remaining access patterns
+will be elaborated on in the future.
+
+```go
+type DAGAccessor interface {
+   Shard(key shard.Key) ShardAccessor
+}
+
+type ShardAccessor interface {
+   Blockstore() (ReadBlockstore, error)
+}
+```
 
 ## Requirements for CARv2
 
@@ -236,17 +334,39 @@ management of the scrap area through usage monitoring + GC. Storage space assign
 - Index offsets need to be relative to the CARv1, and not absolute in the
   physical CARv2 file.
 - Index needs to be iterable.
+- Given any CAR file, we should be able to determine its version and
+  characteristics (concretely, indexed or not indexed).
+- Given a CARv1 file, it should be possible to generate a CARv2 index for it in
+  detached form.
+- Given a CARv2 file, we should be able to decompose it to the corresponding
+  CARv1 payload and the Carbs index. The CAR payload should be exposed with
+  `io.ReaderAt` and `io.Reader` abstractions.
+- Given an indexed CARv2 file, it should be possible to instantiate a
+  `ReadBlockstore` on it in a self-sufficient manner.
+- Given a CARv1 or unindexed CARv2, it should be possible to instantiate a
+  `ReadBlockstore` with an index provided by us.
+- It should be possible to write an indexed CARv2 in streaming fashion. The
+  CARv2 library should do the right thing depending on the declared write
+  characteristics and the output characteristics. For example:
+   1. the writer may declare that blocks are provided in depth-first order and
+      without uniqueness guarantees, but may state they want the output to be in
+      depth-first order AND deduplicated. In this case, the CARv2 library must
+      use the index to prevent duplicate writes (this is the priority case right
+      now).
+   2. the writer may declare blocks are provided in no order and without
+      uniqueness guarantees, but may wish to produce an output in depth-first
+      order and deduplicated. In this case, when finalizing the CAR, the library
+      must evaluate if a rewrite is necessary, and, if so, it should conduct it
+      (this case is not a priority now, but needed down the line for feature
+      completeness).
 
-## TODO
 
-Refcounts CARv1
-PoRep unseal on demand.
-DAG store does not physically own CAR files, it tracks them and they can disappear from under it at any point in time.
-Danging references in shard => across shards.
-shard registration is synchronous
-DAG store knows how to process CARv1, CARv2.
-AddShard is synchronous: error, useless if not. DB guarantees reading after writing.
-locking and transactionality
-transient copies
-migration
+## Discussion: migration from current architecture
 
+TBD.
+
+## Open points
+
+- ...
+- ...
+- ...
