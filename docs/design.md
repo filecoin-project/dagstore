@@ -360,7 +360,6 @@ type ShardAccessor interface {
       (this case is not a priority now, but needed down the line for feature
       completeness).
 
-
 ## Discussion: migration from current architecture
 
 TBD.
