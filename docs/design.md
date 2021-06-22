@@ -202,7 +202,7 @@ scheme://host[:port]?key1=value1&key2=value2[&...]
   `file://`, `http://`.
 - the rest is scheme-dependent.
   - `host[:port]` is usually the main component of the mount, e.g. a file path,
-    a sector ID, etc.
+    a sector ID + deal ID, etc.
   - query parameters map to mount options (e.g. credentials, more)
 
 Scheme -> implementation bindings are kept in a registry.
