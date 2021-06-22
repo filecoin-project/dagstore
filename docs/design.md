@@ -268,7 +268,7 @@ There exists three kinds of indices:
    to the DAG store for storage and safekeeping.
 
    A shard can have infinite number of semantic indices associated with it. Each
-   semantic index is identifid and stamped with its generation data (rule and
+   semantic index is identified and stamped with its generation data (rule and
    version).
 
    We acknowledge that semantic indices perhaps don't belong in the DAG store
