@@ -292,11 +292,21 @@ index.
 
 ### Persistence and reconciliation
 
-Indices will be persisted on disk. 
+Indices will be persisted in a filesystem directory, referenced by their shard
+key. This makes for easy identification.
 
+Although not expected, it is possible that over time the index repo and the shard management layer state will diverge (entropy):
 
+1. Active shards may have their indices deleted (e.g. if an operator deleted a
+   file or the directory).
+2. Destroyed shards may have their indices lying around (e.g. if there was some
+   system error in housekeeping).
 
+A method `ReconcileIndices()` can be used to reconcile the index repo with the
+shard management layer, by:
 
+1. Fetching gone indices from their mounts.
+2. Deleting lingering indices.
 
 ### Interface
 
@@ -362,6 +372,10 @@ type DAGAccessor interface {
 }
 
 type ShardAccessor interface {
+   // Close() the accessor, signalling to the DAG store that we're done here and
+   // possible transient copies can be reclaimed once the shard is released.
+   io.Closer
+
    Blockstore() (ReadBlockstore, error)
 }
 ```
