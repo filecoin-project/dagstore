@@ -117,6 +117,9 @@ To destroy a shard, call:
 dagst.DestroyShard(key []byte) (destroyed bool, err error)
 ```
 
+This erases transient copies from the scrap area, and it removes the shard/mount
+from the shard persistence store.
+
 #### Other operations
 
   * `[Pin/Unpin]Shard()`: retains the shard data in the local scrap area.
@@ -138,10 +141,12 @@ Ceph/GlusterFS, HTTP, FTP, etc.
 This versatility is provided by an abstraction called `mount.Mount`, a pluggable
 component which encapsulates operations/logic to:
 
-1. `Fetch() (io.ReadCloser, error)` Load a CAR from its origin.
+1. `Fetch() (io.ReadSeekCloser, error)` Load a CAR from its origin.
 2. `Info() mount.Info` Provides info about the mount, e.g. whether it's local or
    remote. This is used to determine whether the fetched CAR needs to be copied
-   to a scrap area.
+   to a scrap area. It also indicates whether the stream supports seeking.
+   Calling `Seek()` on an unseekable stream will panic. `Seek()` is used to
+   fast-forward to an index if only that structure needs to be consumed.
 3. `Stat() (mount.Stat, error)` Equivalent to a filesystem stat, provides
    information about the target of the mount: whether it exists, size, etc.
 
@@ -173,10 +178,34 @@ time. A transformation function may be provided in the future as a `RegisterOpt`
 that conducts the unsealing.
 
 A prerequisite to enable unsealing-on-demand possible is PoRep and index
-symmetry, i.e. the byte positions of blocks in the unsealed CAR must be
+symmetry, i.e. the byte positions of blocks in the sealed CAR must be
 identical to those in the unsealed CAR.
 
 *This `Mount` is provided by Lotus, as it's implementation specific.*
+
+#### URL representation and registry
+
+Mounts are stateless objects, serialized as URL for persistence and
+configuration. This enables us to:
+
+1. Record mounts in shard persistence (see below).
+2. Add shards by configuration (e.g. imagine a program whose shards are
+   configured in a configuration file)
+
+The URL format mapping is:
+
+```
+scheme://host[:port]?key1=value1&key2=value2[&...]
+```
+
+- `scheme` is a unique identifier for the mount type, e.g. `lotus://`,
+  `file://`, `http://`.
+- the rest is scheme-dependent.
+  - `host[:port]` is usually the main component of the mount, e.g. a file path,
+    a sector ID, etc.
+  - query parameters map to mount options (e.g. credentials, more)
+
+Scheme -> implementation bindings are kept in a registry.
 
 ### Shard representation and persistence
 
@@ -261,6 +290,14 @@ random-access capability is obtained from the index repo.
 In the future, this subcomponent will also serve the top-level cross-shard
 index.
 
+### Persistence and reconciliation
+
+Indices will be persisted on disk. 
+
+
+
+
+
 ### Interface
 
 ```go
@@ -273,7 +310,8 @@ type FullIndexRepo interface {
    // public
    GetFullIndex(key shard.Key) (FullIndex, error)
 
-   // private
+   // private, called only by shard management when registering
+   // and destroying shards
    InsertFullIndex(key shard.Key, index FullIndex) error
    DeleteFullIndex(key shard.Key) (bool, error)
 }
