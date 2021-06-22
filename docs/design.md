@@ -118,7 +118,7 @@ dagst.DestroyShard(key []byte) (destroyed bool, err error)
 ```
 
 This erases transient copies from the scrap area, and it removes the shard/mount
-from the shard persistence store.
+from the shard persistence store. It errors if the shard is locked/acquired.
 
 #### Other operations
 
