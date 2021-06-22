@@ -412,6 +412,14 @@ type ShardAccessor interface {
       must evaluate if a rewrite is necessary, and, if so, it should conduct it
       (this case is not a priority now, but needed down the line for feature
       completeness).
+- When a client finishes writing to a CARv2 blockstore, it should be able to
+  finish/flush/commit the write and get a CARv2 file.
+- A CARv2 SelectiveCAR API that looks/feels/behaves exactly like a CARv1 Selective
+  CAR API but outputs/writes a v2 instead of a v1 (Note: the output CARv2 file
+  should NOT have duplicate blocks -> this behaviour is similar to what we have
+  for the v1 APIs).
+- Index needs to be marshalable/unmarshallable so the DAG Store can persist/read
+  it.
 
 ## Discussion: migration from current architecture
 
