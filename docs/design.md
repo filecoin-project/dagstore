@@ -295,7 +295,8 @@ index.
 Indices will be persisted in a filesystem directory, referenced by their shard
 key. This makes for easy identification.
 
-Although not expected, it is possible that over time the index repo and the shard management layer state will diverge (entropy):
+Although not expected, it is possible that over time the index repo and the
+shard management layer state will diverge (entropy):
 
 1. Active shards may have their indices deleted (e.g. if an operator deleted a
    file or the directory).
