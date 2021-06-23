@@ -2,8 +2,10 @@ package index
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/suite"
 )
 
 func TestMemIndexRepo(t *testing.T) {
-	runFullIndexRepoTest(t, NewMemory())
+	suite.Run(t, &fullIndexRepoSuite{impl: NewMemoryRepo()})
 }
