@@ -22,19 +22,18 @@ type FullIndexFactory interface {
 // FSIndexRepo implements FullIndexRepo using the local file system to store
 // the indices
 type FSIndexRepo struct {
-	factory FullIndexFactory
 	baseDir string
 }
 
 // NewFSRepo creates a new index repo that stores indices on the local
 // filesystem with the given base directory as the root
-func NewFSRepo(factory FullIndexFactory, baseDir string) (*FSIndexRepo, error) {
+func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 	err := os.MkdirAll(baseDir, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 
-	l := &FSIndexRepo{factory: factory, baseDir: baseDir}
+	l := &FSIndexRepo{baseDir: baseDir}
 
 	bs, err := os.ReadFile(l.versionPath())
 	fileNotFound := err != nil && os.IsNotExist(err)
@@ -53,9 +52,27 @@ func NewFSRepo(factory FullIndexFactory, baseDir string) (*FSIndexRepo, error) {
 	return l, nil
 }
 
-func (l *FSIndexRepo) GetFullIndex(key shard.Key) (idx FullIndex, err error) {
-	// Use the factory to build a FullIndex from the file at the key path
-	return l.factory.Build(l.indexPath(key))
+func (l *FSIndexRepo) GetFullIndex(key shard.Key) (FullIndex, error) {
+	idx := NewMockFullIndex()
+	path := l.indexPath(key)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	err = idx.Unmarshal(f)
+	if err != nil {
+		return nil, err
+	}
+	return idx, nil
 }
 
 func (l *FSIndexRepo) AddFullIndex(key shard.Key, index FullIndex) (err error) {
