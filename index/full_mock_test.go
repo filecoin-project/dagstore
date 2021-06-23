@@ -1,4 +1,4 @@
-package test
+package index
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ func TestEmptyMockIndex(t *testing.T) {
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
 
-	idx := NewMockIndex()
+	idx := NewMockFullIndex()
 
 	len, err := idx.Len()
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestMockIndex(t *testing.T) {
 	cid2, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaa")
 	require.NoError(t, err)
 	offset2 := int64(20)
-	idx := NewMockIndex()
+	idx := NewMockFullIndex()
 
 	idx.Set(cid1, offset1)
 
@@ -79,7 +79,7 @@ func TestMockIndexMarshaling(t *testing.T) {
 	cid2, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaa")
 	require.NoError(t, err)
 	offset2 := int64(20)
-	idx := NewMockIndex()
+	idx := NewMockFullIndex()
 
 	idx.Set(cid1, offset1)
 	idx.Set(cid2, offset2)
@@ -88,7 +88,7 @@ func TestMockIndexMarshaling(t *testing.T) {
 	err = idx.Marshal(&b)
 	require.NoError(t, err)
 
-	idx2 := NewMockIndex()
+	idx2 := NewMockFullIndex()
 	err = idx2.Unmarshal(&b)
 	require.NoError(t, err)
 
