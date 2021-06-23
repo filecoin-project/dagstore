@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/ioutil"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,16 +19,6 @@ type MockMount struct {
 	Val      string
 	URL      *url.URL
 	StatSize uint64
-}
-
-func newMockMount(t *testing.T, u string, stateSize uint64) *MockMount {
-	url, err := url.Parse(u)
-	require.NoError(t, err)
-	return &MockMount{
-		URL:      url,
-		Val:      url.Host,
-		StatSize: stateSize,
-	}
 }
 
 func (m *MockMount) Fetch(_ context.Context) (io.ReadCloser, error) {
@@ -51,21 +40,44 @@ func (m *MockMount) Stat() (Stat, error) {
 	}, nil
 }
 
-func (m *MockMount) Parse(u *url.URL) error {
-	m.Val = u.Host
-	m.URL = u
+type MockMountFactory1 struct{}
 
+func (mf *MockMountFactory1) Parse(u *url.URL) (Mount, error) {
 	vals, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	m.StatSize, err = strconv.ParseUint(vals["size"][0], 10, 64)
+	statSize, err := strconv.ParseUint(vals["size"][0], 10, 64)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &MockMount{
+		Val:      u.Host,
+		URL:      u,
+		StatSize: statSize,
+	}, nil
+}
+
+type MockMountFactory2 struct{}
+
+func (mf *MockMountFactory2) Parse(u *url.URL) (Mount, error) {
+	vals, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	statSize, err := strconv.ParseUint(vals["size"][0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	return &MockMount{
+		Val:      u.Host,
+		URL:      u,
+		StatSize: statSize * 2,
+	}, nil
 }
 
 func TestRegistry(t *testing.T) {
@@ -74,49 +86,40 @@ func TestRegistry(t *testing.T) {
 
 	// create a registry
 	r := Registry{
-		m: make(map[string]reflect.Type),
+		m: make(map[string]MountFactory),
 	}
 
-	// create mock mount 1
-	url := fmt.Sprintf("http://host1:123?size=%d", m1StatSize)
-	m1 := newMockMount(t, url, m1StatSize)
-	require.NoError(t, r.Register(m1.URL.Scheme, m1))
+	// create & register mock mount factory 1
+	u := fmt.Sprintf("http://host1:123?size=%d", m1StatSize)
+	url, err := url.Parse(u)
+	require.NoError(t, err)
+	m1 := &MockMountFactory1{}
+	require.NoError(t, r.Register(url.Scheme, m1))
 	// // register same scheme again -> fails
-	require.Error(t, r.Register(m1.URL.Scheme, m1))
+	require.Error(t, r.Register(url.Scheme, m1))
 
-	// create and register mock mount 2
+	// create and register mock mount factory 2
 	url2 := fmt.Sprintf("ftp://host2:1234?size=%d", m2StatSize)
-	m2 := newMockMount(t, url2, m2StatSize)
-	require.NoError(t, r.Register(m2.URL.Scheme, m2))
+	u2, err := url.Parse(url2)
+	require.NoError(t, err)
+	m2 := &MockMountFactory2{}
+	require.NoError(t, r.Register(u2.Scheme, m2))
 
 	// instantiate mount 1 and verify state is constructed correctly
-	m, err := r.Instantiate(m1.URL)
+	m, err := r.Instantiate(url)
 	require.NoError(t, err)
-	require.Equal(t, m1.URL.Host, fetchAndReadAll(t, m))
+	require.Equal(t, url.Host, fetchAndReadAll(t, m))
 	stat, err := m.Stat()
 	require.NoError(t, err)
 	require.Equal(t, m1StatSize, stat.Size)
 
 	// instantiate mount 2 and verify state is constructed correctly
-	m, err = r.Instantiate(m2.URL)
+	m, err = r.Instantiate(u2)
 	require.NoError(t, err)
-	require.Equal(t, m2.URL.Host, fetchAndReadAll(t, m2))
+	require.Equal(t, u2.Host, fetchAndReadAll(t, m))
 	stat, err = m.Stat()
 	require.NoError(t, err)
-	require.Equal(t, m2StatSize, stat.Size)
-}
-
-func TestRegistrationFailWithNonPointer(t *testing.T) {
-	type NonPointerMount struct {
-		Mount
-	}
-
-	// create a registry
-	r := Registry{
-		m: make(map[string]reflect.Type),
-	}
-
-	require.EqualError(t, r.Register("http", NonPointerMount{}), ErrRegistrationWithNonPointerType.Error())
+	require.Equal(t, m2StatSize*2, stat.Size)
 }
 
 func fetchAndReadAll(t *testing.T, m Mount) string {

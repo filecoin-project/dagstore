@@ -45,7 +45,7 @@ const (
 //
 // Mounts must define a deterministic URL representation which will be used to:
 //
-//  a. deserialise the Mount from DAG persistence when resuming the system.
+//  a. deserialise the Mount from DAG persistence when resuming the system by using a pre-defined Mount factory mapped to the URL scheme.
 //  b. support adding mounts from configuration files.
 type Mount interface {
 	// Fetch fetches the asset from its original location, returning a read only
@@ -57,9 +57,6 @@ type Mount interface {
 
 	// Stat describes the remote resource.
 	Stat() (Stat, error)
-
-	// Parse initializes the mount from a URL. This is a pure function.
-	Parse(url *url.URL) error
 }
 
 // Info describes a mount.
@@ -71,4 +68,10 @@ type Info struct {
 type Stat struct {
 	Exists bool
 	Size   uint64
+}
+
+// MountFactory allows instantiation of a Mount from the deterministic URL representation defined by the Mount.
+type MountFactory interface {
+	// Parse initializes the mount from a URL.
+	Parse(u *url.URL) (Mount, error)
 }
