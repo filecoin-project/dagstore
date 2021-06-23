@@ -1,21 +1,21 @@
-package test
+package index
 
 import (
 	"bytes"
 	"testing"
 
-	"github.com/filecoin-project/dagstore/index"
 	"github.com/filecoin-project/dagstore/shard"
+
 	"github.com/ipfs/go-cid"
 	"github.com/stretchr/testify/require"
 )
 
-func RunIndexRepoTest(t *testing.T, r index.FullIndexRepo) {
+func runFullIndexRepoTest(t *testing.T, r FullIndexRepo) {
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
 	offset1 := int64(10)
 	k := shard.Key("shard-key-1")
-	idx := NewMockIndex()
+	idx := NewMockFullIndex()
 	idx.Set(cid1, offset1)
 
 	stat, err := r.StatFullIndex(k)
