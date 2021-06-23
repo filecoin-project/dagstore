@@ -49,7 +49,7 @@ func (r *Registry) Instantiate(u *url.URL) (Mount, error) {
 
 	mt, err := mft.Parse(u)
 	if err != nil {
-		return nil, xerrors.Errorf("failed to instantiate mount, factory.Parse, err=%s", err)
+		return nil, xerrors.Errorf("failed to instantiate mount with factory.Parse: %w", err)
 
 	}
 

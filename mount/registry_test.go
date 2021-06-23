@@ -94,16 +94,16 @@ func TestRegistry(t *testing.T) {
 	url, err := url.Parse(u)
 	require.NoError(t, err)
 	m1 := &MockMountFactory1{}
-	require.NoError(t, r.Register(url.Scheme, m1))
+	require.NoError(t, r.Register("http", m1))
 	// // register same scheme again -> fails
-	require.Error(t, r.Register(url.Scheme, m1))
+	require.Error(t, r.Register("http", m1))
 
 	// create and register mock mount factory 2
 	url2 := fmt.Sprintf("ftp://host2:1234?size=%d", m2StatSize)
 	u2, err := url.Parse(url2)
 	require.NoError(t, err)
 	m2 := &MockMountFactory2{}
-	require.NoError(t, r.Register(u2.Scheme, m2))
+	require.NoError(t, r.Register("ftp", m2))
 
 	// instantiate mount 1 and verify state is constructed correctly
 	m, err := r.Instantiate(url)
