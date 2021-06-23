@@ -53,7 +53,7 @@ func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 }
 
 func (l *FSIndexRepo) GetFullIndex(key shard.Key) (FullIndex, error) {
-	idx := NewMockFullIndex()
+	idx := NewMockFullIndex() // TODO replace with an implementation backed by Carbs serialization/deserialization.
 	path := l.indexPath(key)
 
 	f, err := os.Open(path)
