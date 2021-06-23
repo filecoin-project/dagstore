@@ -13,7 +13,7 @@ type MemIndexRepo struct {
 	idxs map[string]FullIndex
 }
 
-func NewMemory() *MemIndexRepo {
+func NewMemoryRepo() *MemIndexRepo {
 	return &MemIndexRepo{idxs: make(map[string]FullIndex)}
 }
 

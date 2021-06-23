@@ -26,9 +26,9 @@ type FSIndexRepo struct {
 	baseDir string
 }
 
-// NewFS creates a new index repo that stores indices on the local
+// NewFSRepo creates a new index repo that stores indices on the local
 // filesystem with the given base directory as the root
-func NewFS(factory FullIndexFactory, baseDir string) (*FSIndexRepo, error) {
+func NewFSRepo(factory FullIndexFactory, baseDir string) (*FSIndexRepo, error) {
 	err := os.MkdirAll(baseDir, os.ModePerm)
 	if err != nil {
 		return nil, err

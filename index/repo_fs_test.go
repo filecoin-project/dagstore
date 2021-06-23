@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 )
 
 type indexFactory struct {
@@ -37,7 +38,8 @@ var _ FullIndexFactory = (*indexFactory)(nil)
 func TestLocalIndexRepo(t *testing.T) {
 	factory := indexFactory{}
 	basePath := t.TempDir()
-	repo, err := NewFS(factory, basePath)
+	repo, err := NewFSRepo(factory, basePath)
 	require.NoError(t, err)
-	runFullIndexRepoTest(t, repo)
+
+	suite.Run(t, &fullIndexRepoSuite{impl: repo})
 }

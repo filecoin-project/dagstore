@@ -2,15 +2,24 @@ package index
 
 import (
 	"bytes"
-	"testing"
 
 	"github.com/filecoin-project/dagstore/shard"
 
 	"github.com/ipfs/go-cid"
+
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 )
 
-func runFullIndexRepoTest(t *testing.T, r FullIndexRepo) {
+type fullIndexRepoSuite struct {
+	suite.Suite
+	impl FullIndexRepo
+}
+
+func (s *fullIndexRepoSuite) TestAllMethods() {
+	r := s.impl
+	t := s.T()
+
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
 	offset1 := int64(10)
