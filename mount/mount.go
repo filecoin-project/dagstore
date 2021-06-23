@@ -1,6 +1,7 @@
 package mount
 
 import (
+	"context"
 	"io"
 	"net/url"
 )
@@ -49,7 +50,7 @@ const (
 type Mount interface {
 	// Fetch fetches the asset from its original location, returning a read only
 	// stream. This may be a remote or local stream.
-	Fetch() (io.ReadCloser, error)
+	Fetch(ctx context.Context) (io.ReadCloser, error)
 
 	// Info describes the Mount. This is a pure function.
 	Info() Info
