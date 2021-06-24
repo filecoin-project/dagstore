@@ -20,7 +20,7 @@ type FullIndex interface {
 	// If the CID is not contained in the index, it will return an
 	// ErrCidNotFound error
 	// If an error ocurred, it will be returned.
-	Offset(c cid.Cid) (offset int64, err error)
+	Offset(c cid.Cid) (offset uint64, err error)
 
 	// Contains checks whether a given CID is contained in the index.
 	Contains(c cid.Cid) (bool, error)
@@ -36,8 +36,11 @@ type FullIndex interface {
 	//
 	// A non-nil error will abort the traversal, and the error will be
 	// propagated to the caller.
-	ForEach(func(c cid.Cid, offset int64) (ok bool, err error)) error
+	ForEach(func(c cid.Cid, offset uint64) (ok bool, err error)) error
 
 	// Marshal writes the index to the given writer.
 	Marshal(w io.Writer) error
+
+	// Unmarshal loads the index from the given reader.
+	Unmarshal(w io.Reader) error
 }
