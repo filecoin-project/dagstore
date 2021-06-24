@@ -27,17 +27,21 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	idx := NewMockFullIndex()
 	idx.Set(cid1, offset1)
 
+	// Verify that an empty repo has zero size
 	stat, err := r.StatFullIndex(k)
 	require.NoError(t, err)
 	require.False(t, stat.Exists)
 	require.EqualValues(t, 0, stat.Size)
 
+	// Verify that there is an error trying to retrieve an index before it's added
 	_, err = r.GetFullIndex(k)
 	require.Error(t, err)
 
+	// Add an index
 	err = r.AddFullIndex(k, idx)
 	require.NoError(t, err)
 
+	// Verify the size of the index is correct
 	var b bytes.Buffer
 	err = idx.Marshal(&b)
 	require.NoError(t, err)
@@ -48,6 +52,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.True(t, stat.Exists)
 	require.EqualValues(t, expStatSize, stat.Size)
 
+	// Verify that we can retrieve an index and perform a lookup
 	fidx, err := r.GetFullIndex(k)
 	require.NoError(t, err)
 
@@ -55,10 +60,12 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.NoError(t, err)
 	require.Equal(t, offset1, offset)
 
+	// Drop the index
 	dropped, err := r.DropFullIndex(k)
 	require.NoError(t, err)
 	require.True(t, dropped)
 
+	// Verify that the index is no longer present
 	stat, err = r.StatFullIndex(k)
 	require.NoError(t, err)
 	require.False(t, stat.Exists)

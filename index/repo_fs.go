@@ -35,16 +35,23 @@ func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 
 	l := &FSIndexRepo{baseDir: baseDir}
 
+	// Get the repo version
 	bs, err := os.ReadFile(l.versionPath())
-	fileNotFound := err != nil && os.IsNotExist(err)
-	if fileNotFound {
-		err = os.WriteFile(l.versionPath(), []byte(repoVersion), 0666)
-		if err != nil {
-			return nil, err
+	if err != nil {
+		// If the repo has not been initialized, write out the repo version file
+		if os.IsNotExist(err) {
+			err = os.WriteFile(l.versionPath(), []byte(repoVersion), 0666)
+			if err != nil {
+				return nil, err
+			}
+			return l, nil
 		}
-		return l, nil
+
+		// There was some other error
+		return nil, err
 	}
 
+	// Check that this library can read this repo
 	if string(bs) != repoVersion {
 		return nil, xerrors.Errorf("cannot read existing repo with version %s", bs)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/ipfs/go-cid"
 )
 
+// MockFullIndex implements an in-memory index that can used in tests
 type MockFullIndex struct {
 	lk  sync.RWMutex
 	idx map[string]int64
