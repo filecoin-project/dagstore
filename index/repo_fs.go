@@ -3,6 +3,7 @@ package index
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/xerrors"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
-const repoVersion = "1"
+const (
+	repoVersion = "1"
+	indexSuffix = ".full.idx"
+)
 
 // FullIndexFactory provides a mechanism to load a FullIndex from a file path
 type FullIndexFactory interface {
@@ -123,8 +127,69 @@ func (l *FSIndexRepo) StatFullIndex(key shard.Key) (Stat, error) {
 	}, nil
 }
 
+var stopWalk = xerrors.New("stop walk")
+
+// ForEach iterates over each index file to extract the key
+func (l *FSIndexRepo) ForEach(f func(shard.Key) (bool, error)) error {
+	// Iterate over each index file
+	err := l.eachIndexFile(func(info os.FileInfo) error {
+		// The file name is derived by base 58 encoding the key
+		// so decode the file name to get the key
+		name := info.Name()
+		b58k := name[:len(name)-len(indexSuffix)]
+		k, err := base58.Decode(b58k)
+		if err != nil {
+			return err
+		}
+
+		// Call the callback with the key
+		ok, err := f(k)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return stopWalk
+		}
+		return nil
+	})
+	if err == stopWalk {
+		return nil
+	}
+	return err
+}
+
+// Len counts all index files in the base path
+func (l *FSIndexRepo) Len() (int, error) {
+	len := 0
+	err := l.eachIndexFile(func(info os.FileInfo) error {
+		len++
+		return nil
+	})
+	return len, err
+}
+
+// Size sums the size of all index files in the base path
+func (l *FSIndexRepo) Size() (uint64, error) {
+	var size uint64
+	err := l.eachIndexFile(func(info os.FileInfo) error {
+		size += uint64(info.Size())
+		return nil
+	})
+	return size, err
+}
+
+// eachIndexFile calls the callback for each index file
+func (l *FSIndexRepo) eachIndexFile(f func(info os.FileInfo) error) error {
+	return filepath.Walk(l.baseDir, func(path string, info os.FileInfo, err error) error {
+		if strings.HasSuffix(info.Name(), indexSuffix) {
+			return f(info)
+		}
+		return nil
+	})
+}
+
 func (l *FSIndexRepo) indexPath(key shard.Key) string {
-	return filepath.Join(l.baseDir, base58.Encode(key)+".full.idx")
+	return filepath.Join(l.baseDir, base58.Encode(key)+indexSuffix)
 }
 
 func (l *FSIndexRepo) versionPath() string {

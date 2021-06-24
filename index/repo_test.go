@@ -3,6 +3,8 @@ package index
 import (
 	"bytes"
 
+	"golang.org/x/xerrors"
+
 	"github.com/filecoin-project/dagstore/shard"
 
 	"github.com/ipfs/go-cid"
@@ -33,6 +35,12 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.False(t, stat.Exists)
 	require.EqualValues(t, 0, stat.Size)
 
+	len, err := r.Len()
+	require.EqualValues(t, 0, len)
+
+	size, err := r.Size()
+	require.EqualValues(t, 0, size)
+
 	// Verify that there is an error trying to retrieve an index before it's added
 	_, err = r.GetFullIndex(k)
 	require.Error(t, err)
@@ -40,6 +48,9 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	// Add an index
 	err = r.AddFullIndex(k, idx)
 	require.NoError(t, err)
+
+	len, err = r.Len()
+	require.EqualValues(t, 1, len)
 
 	// Verify the size of the index is correct
 	var b bytes.Buffer
@@ -51,6 +62,20 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.NoError(t, err)
 	require.True(t, stat.Exists)
 	require.EqualValues(t, expStatSize, stat.Size)
+
+	size, err = r.Size()
+	require.EqualValues(t, expStatSize, size)
+
+	count := 0
+	err = r.ForEach(func(key shard.Key) (bool, error) {
+		if !bytes.Equal(key, k) {
+			return false, xerrors.Errorf("for each returned wrong key")
+		}
+		count++
+		return true, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
 
 	// Verify that we can retrieve an index and perform a lookup
 	fidx, err := r.GetFullIndex(k)
@@ -70,4 +95,10 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.NoError(t, err)
 	require.False(t, stat.Exists)
 	require.EqualValues(t, 0, stat.Size)
+
+	len, err = r.Len()
+	require.EqualValues(t, 0, len)
+
+	size, err = r.Size()
+	require.EqualValues(t, 0, size)
 }

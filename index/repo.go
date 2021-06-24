@@ -29,6 +29,21 @@ type FullIndexRepo interface {
 
 	// StatFullIndex stats a full index.
 	StatFullIndex(key shard.Key) (Stat, error)
+
+	// Len returns the number of indices in the repo.
+	Len() (int, error)
+
+	// ForEach calls the callback with the key for each index.
+	//
+	// Returning true from the callback will continue the traversal.
+	// Returning false will terminate the traversal.
+	//
+	// A non-nil error will abort the traversal, and the error will be
+	// propagated to the caller.
+	ForEach(func(shard.Key) (bool, error)) error
+
+	// Size returns the size of the repo in bytes.
+	Size() (uint64, error)
 }
 
 type ManifestRepo interface {
