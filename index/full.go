@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"io"
 
 	"github.com/ipfs/go-cid"
 )
@@ -36,4 +37,7 @@ type FullIndex interface {
 	// A non-nil error will abort the traversal, and the error will be
 	// propagated to the caller.
 	ForEach(func(c cid.Cid, offset int64) (ok bool, err error)) error
+
+	// Marshal writes the index to the given writer.
+	Marshal(w io.Writer) error
 }
