@@ -21,6 +21,10 @@ type MockMount struct {
 	StatSize uint64
 }
 
+func (m *MockMount) FetchSeek(ctx context.Context) (io.ReadSeekCloser, error) {
+	panic("implement me")
+}
+
 func (m *MockMount) Fetch(_ context.Context) (io.ReadCloser, error) {
 	r := io.NopCloser(strings.NewReader(m.Val))
 	return r, nil
@@ -28,8 +32,8 @@ func (m *MockMount) Fetch(_ context.Context) (io.ReadCloser, error) {
 
 func (m *MockMount) Info() Info {
 	return Info{
-		Kind: MountKindRemote,
-		URL:  m.URL,
+		Source: SourceRemote,
+		URL:    m.URL,
 	}
 }
 
@@ -86,7 +90,7 @@ func TestRegistry(t *testing.T) {
 
 	// create a registry
 	r := Registry{
-		m: make(map[string]MountFactory),
+		m: make(map[string]Type),
 	}
 
 	// create & register mock mount factory 1

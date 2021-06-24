@@ -4,11 +4,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"golang.org/x/xerrors"
-
-	"github.com/mr-tron/base58"
-
 	"github.com/filecoin-project/dagstore/shard"
+
+	"golang.org/x/xerrors"
 )
 
 const repoVersion = "1"
@@ -24,6 +22,8 @@ type FullIndexFactory interface {
 type FSIndexRepo struct {
 	baseDir string
 }
+
+var _ FullIndexRepo = (*FSIndexRepo)(nil)
 
 // NewFSRepo creates a new index repo that stores indices on the local
 // filesystem with the given base directory as the root
@@ -124,11 +124,9 @@ func (l *FSIndexRepo) StatFullIndex(key shard.Key) (Stat, error) {
 }
 
 func (l *FSIndexRepo) indexPath(key shard.Key) string {
-	return filepath.Join(l.baseDir, base58.Encode(key)+".full.idx")
+	return filepath.Join(l.baseDir, key.String()+".full.idx")
 }
 
 func (l *FSIndexRepo) versionPath() string {
 	return filepath.Join(l.baseDir, ".version")
 }
-
-var _ FullIndexRepo = (*FSIndexRepo)(nil)
