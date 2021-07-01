@@ -5,35 +5,35 @@ import (
 	"sync"
 
 	"github.com/filecoin-project/dagstore/shard"
+	"github.com/ipld/go-car/v2/index"
 )
 
 // MemIndexRepo implements FullIndexRepo with an in-memory map.
 type MemIndexRepo struct {
 	lk   sync.RWMutex
-	idxs map[string]FullIndex
+	idxs map[shard.Key]index.Index
 }
 
 func NewMemoryRepo() *MemIndexRepo {
-	return &MemIndexRepo{idxs: make(map[string]FullIndex)}
+	return &MemIndexRepo{idxs: make(map[shard.Key]index.Index)}
 }
 
-func (m *MemIndexRepo) GetFullIndex(key shard.Key) (idx FullIndex, err error) {
+func (m *MemIndexRepo) GetFullIndex(key shard.Key) (idx index.Index, err error) {
 	m.lk.RLock()
 	defer m.lk.RUnlock()
 
-	idx, ok := m.idxs[string(key)]
+	idx, ok := m.idxs[key]
 	if !ok {
 		return nil, ErrNotFound
 	}
-
 	return idx, nil
 }
 
-func (m *MemIndexRepo) AddFullIndex(key shard.Key, index FullIndex) (err error) {
+func (m *MemIndexRepo) AddFullIndex(key shard.Key, index index.Index) (err error) {
 	m.lk.Lock()
 	defer m.lk.Unlock()
 
-	m.idxs[string(key)] = index
+	m.idxs[key] = index
 
 	return nil
 }
@@ -43,7 +43,7 @@ func (m *MemIndexRepo) DropFullIndex(key shard.Key) (dropped bool, err error) {
 	defer m.lk.Unlock()
 
 	// TODO need to check if the index exists to be able to report whether it was dropped or not.
-	delete(m.idxs, string(key))
+	delete(m.idxs, key)
 
 	return true, nil
 }
@@ -52,7 +52,7 @@ func (m *MemIndexRepo) StatFullIndex(key shard.Key) (Stat, error) {
 	m.lk.RLock()
 	defer m.lk.RUnlock()
 
-	_, ok := m.idxs[string(key)]
+	_, ok := m.idxs[key]
 	if !ok {
 		return Stat{Exists: false}, nil
 	}
@@ -112,7 +112,7 @@ func (m *MemIndexRepo) Size() (uint64, error) {
 }
 
 func (m *MemIndexRepo) indexSize(k shard.Key) (uint64, error) {
-	idx, ok := m.idxs[string(k)]
+	idx, ok := m.idxs[k]
 	if !ok {
 		return 0, ErrNotFound
 	}

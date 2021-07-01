@@ -44,7 +44,7 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
 	offset1 := int64(10)
-	k := shard.Key("shard-key-1")
+	k := shard.NewKey("shard-key-1")
 	idx := NewMockFullIndex()
 	idx.Set(cid1, offset1)
 

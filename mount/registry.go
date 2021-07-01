@@ -15,11 +15,16 @@ var ErrUnrecognizedScheme = errors.New("unrecognized mount scheme")
 // Registry is a registry of Mount factories known to the DAG store.
 type Registry struct {
 	lk sync.RWMutex
-	m  map[string]MountFactory
+	m  map[string]Type
+}
+
+// NewRegistry constructs a blank registry.
+func NewRegistry() *Registry {
+	return &Registry{}
 }
 
 // Register adds a new Mount factory to the registry and maps it against the given URL scheme.
-func (r *Registry) Register(scheme string, mount MountFactory) error {
+func (r *Registry) Register(scheme string, mount Type) error {
 	r.lk.Lock()
 	defer r.lk.Unlock()
 

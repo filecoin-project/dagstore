@@ -1,8 +1,13 @@
 package index
 
 import (
+	"errors"
+
 	"github.com/filecoin-project/dagstore/shard"
+	"github.com/ipld/go-car/v2/index"
 )
+
+var ErrNotFound = errors.New("index not found")
 
 // Repo is the central index repository object that manages full indices and
 // manifests.
@@ -18,10 +23,10 @@ type Stat struct {
 
 type FullIndexRepo interface {
 	// GetFullIndex returns the full index for the specified shard.
-	GetFullIndex(key shard.Key) (FullIndex, error)
+	GetFullIndex(key shard.Key) (index.Index, error)
 
 	// AddFullIndex persists a full index for a shard.
-	AddFullIndex(key shard.Key, index FullIndex) error
+	AddFullIndex(key shard.Key, index index.Index) error
 
 	// DropFullIndex drops the full index for the specified shard. If the error
 	// is nil, it returns whether an index was effectively dropped.
@@ -46,6 +51,7 @@ type FullIndexRepo interface {
 	Size() (uint64, error)
 }
 
+// TODO unimplemented.
 type ManifestRepo interface {
 	// ListManifests returns the available manifests for a given shard,
 	// identified by their ManifestKey.
