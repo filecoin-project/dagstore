@@ -11,25 +11,25 @@ import (
 // MockFullIndex implements an in-memory index that can used in tests
 type MockFullIndex struct {
 	lk  sync.RWMutex
-	idx map[string]int64
+	idx map[string]uint64
 }
 
 var _ FullIndex = (*MockFullIndex)(nil)
 
 func NewMockFullIndex() *MockFullIndex {
 	return &MockFullIndex{
-		idx: make(map[string]int64),
+		idx: make(map[string]uint64),
 	}
 }
 
-func (m *MockFullIndex) Set(c cid.Cid, offset int64) {
+func (m *MockFullIndex) Set(c cid.Cid, offset uint64) {
 	m.lk.Lock()
 	defer m.lk.Unlock()
 
 	m.idx[c.String()] = offset
 }
 
-func (m *MockFullIndex) Offset(c cid.Cid) (int64, error) {
+func (m *MockFullIndex) Offset(c cid.Cid) (uint64, error) {
 	m.lk.Lock()
 	defer m.lk.Unlock()
 
@@ -55,7 +55,7 @@ func (m *MockFullIndex) Len() (l int64, err error) {
 	return int64(len(m.idx)), nil
 }
 
-func (m *MockFullIndex) ForEach(f func(c cid.Cid, offset int64) (ok bool, err error)) error {
+func (m *MockFullIndex) ForEach(f func(c cid.Cid, offset uint64) (ok bool, err error)) error {
 	m.lk.Lock()
 	defer m.lk.Unlock()
 
