@@ -54,35 +54,6 @@ type DAGStore struct {
 	wg       sync.WaitGroup
 }
 
-type OpType int
-
-const (
-	OpShardRegister OpType = iota
-	OpShardFetch
-	OpShardFetchDone
-	OpShardIndex
-	OpShardIndexDone
-	OpShardMakeAvailable
-	OpShardDestroy
-	OpShardAcquire
-	OpShardFail
-	OpShardRelease
-)
-
-func (o OpType) String() string {
-	return [...]string{
-		"OpShardRegister",
-		"OpShardFetch",
-		"OpShardFetchDone",
-		"OpShardIndex",
-		"OpShardIndexDone",
-		"OpShardMakeAvailable",
-		"OpShardDestroy",
-		"OpShardAcquire",
-		"OpShardFail",
-		"OpShardRelease"}[o]
-}
-
 // Task represents an operation to be performed on a shard or the DAG store.
 type Task struct {
 	Op    OpType

@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/filecoin-project/dagstore/mount"
-	"github.com/ipld/go-car/v2"
-	carindex "github.com/ipld/go-car/v2/index"
 )
 
 // control runs the DAG store's event loop.
@@ -15,6 +13,7 @@ func (d *DAGStore) control() {
 
 	tsk, err := d.consumeNext()
 	for ; err == nil; tsk, err = d.consumeNext() {
+		// TODO lower to debug before release
 		log.Infow("processing task", "op", tsk.Op, "shard", tsk.Shard.key)
 
 		s := tsk.Shard
@@ -143,7 +142,7 @@ func (d *DAGStore) control() {
 				s.wAcquire = s.wAcquire[:0] // empty acquirers.
 			}
 
-			// TODO trigger retries?
+			// TODO notify application.
 
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
