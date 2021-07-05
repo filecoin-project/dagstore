@@ -5,31 +5,52 @@ import (
 	"fmt"
 )
 
+type OpType int
+
+const (
+	OpShardRegister OpType = iota
+	OpShardMakeAvailable
+	OpShardDestroy
+	OpShardAcquire
+	OpShardFail
+	OpShardRelease
+)
+
+func (o OpType) String() string {
+	return [...]string{
+		"OpShardRegister",
+		"OpShardMakeAvailable",
+		"OpShardDestroy",
+		"OpShardAcquire",
+		"OpShardFail",
+		"OpShardRelease"}[o]
+}
+
 // control runs the DAG store's event loop.
 func (d *DAGStore) control() {
 	defer d.wg.Done()
 
 	tsk, err := d.consumeNext()
 	for ; err == nil; tsk, err = d.consumeNext() {
-		log.Debugw("processing task", "op", tsk.Op, "shard", tsk.Shard.key, "error", tsk.Error)
+		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
-		switch s := tsk.Shard; tsk.Op {
+		switch s := tsk.shard; tsk.op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
 				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
-				_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.internalCh)
+				_ = d.queueTask(&task{op: OpShardFail, shard: tsk.shard, err: err}, d.internalCh)
 				break
 			}
 
 			s.state = ShardStateInitializing
 
-			go d.initializeAsync(tsk.Ctx, s, s.mount)
+			go d.initializeAsync(tsk.ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
 			if s.wRegister != nil {
-				res := ShardResult{Key: s.key}
-				go s.wRegister.dispatch(res)
+				res := &ShardResult{Key: s.key}
+				d.sendResult(res, s.wRegister)
 				s.wRegister = nil
 			}
 
@@ -38,12 +59,12 @@ func (d *DAGStore) control() {
 			// trigger queued acquisition waiters.
 			for _, w := range s.wAcquire {
 				s.refs++
-				go d.acquireAsync(tsk.Ctx, w, s, s.mount)
+				go d.acquireAsync(tsk.ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
-			w := &waiter{ctx: tsk.Ctx, outCh: tsk.Resp}
+			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
@@ -52,7 +73,7 @@ func (d *DAGStore) control() {
 
 			s.state = ShardStateServing
 			s.refs++
-			go d.acquireAsync(tsk.Ctx, w, s, s.mount)
+			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
@@ -61,41 +82,39 @@ func (d *DAGStore) control() {
 			}
 			s.refs--
 
+			if s.refs == 0 {
+				s.state = ShardStateAvailable
+			}
+
 		case OpShardFail:
 			s.state = ShardStateErrored
-			s.err = tsk.Error
+			s.err = tsk.err
 
 			// can't block the event loop, so launch a goroutine to notify.
 			if s.wRegister != nil {
-				res := ShardResult{
+				res := &ShardResult{
 					Key:   s.key,
-					Error: fmt.Errorf("failed to register shard: %w", tsk.Error),
+					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
-				go s.wRegister.dispatch(res)
+				d.sendResult(res, s.wRegister)
 			}
 
 			// fail waiting acquirers.
 			// can't block the event loop, so launch a goroutine per acquirer.
 			if len(s.wAcquire) > 0 {
-				res := ShardResult{
-					Key:   s.key,
-					Error: fmt.Errorf("failed to acquire shard: %w", tsk.Error),
-				}
-				for _, w := range s.wAcquire {
-					w.dispatch(res)
-				}
-				s.wAcquire = s.wAcquire[:0] // empty acquirers.
+				err := fmt.Errorf("failed to acquire shard: %w", tsk.err)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, s.wAcquire...)
+				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
 			// TODO notify application.
 
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
-				res := ShardResult{
-					Key:   s.key,
-					Error: fmt.Errorf("failed to destroy shard; active references: %d", s.refs),
-				}
-				go func(ch chan ShardResult) { ch <- res }(tsk.Resp)
+				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, tsk.waiter)
 				break
 			}
 
@@ -111,7 +130,7 @@ func (d *DAGStore) control() {
 	}
 }
 
-func (d *DAGStore) consumeNext() (tsk *Task, error error) {
+func (d *DAGStore) consumeNext() (tsk *task, error error) {
 	select {
 	case tsk = <-d.internalCh: // drain internal first; these are tasks emitted from the event loop.
 		return tsk, nil

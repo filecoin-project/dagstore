@@ -9,13 +9,10 @@ import (
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
-	"github.com/ipld/go-car/v2"
-	"github.com/ipld/go-car/v2/blockstore"
-	"github.com/ipld/go-car/v2/index"
-
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/ipld/go-car/v2"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -231,18 +228,8 @@ func TestConcurrentAcquires(t *testing.T) {
 	t.Run("256", func(t *testing.T) { run(t, 256) })
 }
 
-func TestBlockNotFound(t *testing.T) {
-	reader, err := car.NewReader(bytes.NewReader(carv2))
-	require.NoError(t, err)
-
-	var (
-		payloadR = reader.CarV1Reader()
-		idxR     = reader.IndexReader()
-	)
-
-	idx, err := index.ReadFrom(idxR)
-	require.NoError(t, err)
-
-	bs := blockstore.ReadOnlyOf(payloadR, idx)
-	fmt.Println(bs.Get(rootCID))
+// TestBlockCallback tests that blocking a callback blocks the dispatcher
+// but not the event loop.
+func TestBlockCallback(t *testing.T) {
+	t.Skip("TODO")
 }

@@ -21,21 +21,21 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
 		err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
-		w.dispatch(ShardResult{Key: k, Error: err})
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
 	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
 		err = fmt.Errorf("failed to recover index for shard %s: %w", k, err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
-		w.dispatch(ShardResult{Key: k, Error: err})
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
 	sa, err := NewShardAccessor(k, reader, idx)
-	w.dispatch(ShardResult{Key: k, Accessor: sa, Error: err})
+	d.sendResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 
 // initializeAsync initializes a shard asynchronously by fetching its data and
@@ -44,7 +44,7 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
 		err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
 		return
 	}
 
@@ -53,13 +53,13 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 	carreader, err := car.NewReader(reader)
 	if err != nil {
 		err = fmt.Errorf("failed to read car: %w", err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
 		return
 	}
 
 	if has := carreader.Header.HasIndex(); !has {
 		err = fmt.Errorf("processing of unindexed cars unimplemented")
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
 		return
 	}
 
@@ -67,16 +67,16 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 	idx, err := carindex.ReadFrom(ir)
 	if err != nil {
 		err = fmt.Errorf("failed to read carv2 index: %w", err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.completionCh)
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
 		return
 	}
 
 	err = d.indices.AddFullIndex(s.key, idx)
 	if err != nil {
 		err = fmt.Errorf("failed to add index for shard: %w", err)
-		_ = d.queueTask(&Task{Op: OpShardFail, Shard: s, Error: err}, d.internalCh)
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.internalCh)
 		return
 	}
 
-	_ = d.queueTask(&Task{Op: OpShardMakeAvailable, Shard: s, Index: idx}, d.completionCh)
+	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
 }

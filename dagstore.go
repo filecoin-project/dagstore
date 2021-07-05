@@ -12,7 +12,6 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 	ds "github.com/ipfs/go-datastore"
 	logging "github.com/ipfs/go-log/v2"
-	carindex "github.com/ipld/go-car/v2/index"
 )
 
 var log = logging.Logger("dagstore")
@@ -42,25 +41,31 @@ type DAGStore struct {
 	indices index.FullIndexRepo
 
 	// externalCh receives external tasks.
-	externalCh chan *Task
+	externalCh chan *task
 	// internalCh receives internal tasks to the event loop.
-	internalCh chan *Task
+	internalCh chan *task
 	// completionCh receives tasks queued up as a result of async completions.
-	completionCh chan *Task
+	completionCh chan *task
+	// dispatchCh is serviced by the dispatcher goroutine.
+	dispatchCh chan *dispatch
 
 	ctx      context.Context
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
 }
 
+type dispatch struct {
+	w   *waiter
+	res *ShardResult
+}
+
 // Task represents an operation to be performed on a shard or the DAG store.
-type Task struct {
-	Ctx   context.Context // context governing the operation if this is an external op.
-	Op    OpType
-	Shard *Shard
-	Resp  chan ShardResult
-	Index carindex.Index
-	Error error
+type task struct {
+	*waiter
+
+	op    OpType
+	shard *Shard
+	err   error
 }
 
 // ShardResult encapsulates a result from an asynchronous operation.
@@ -134,15 +139,19 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		config:       cfg,
 		indices:      indices,
 		shards:       make(map[shard.Key]*Shard),
-		externalCh:   make(chan *Task, 128), // len=128, concurrent external tasks that can be queued up before exercising backpressure.
-		internalCh:   make(chan *Task, 1),   // len=1, because eventloop will only ever stage another internal event.
-		completionCh: make(chan *Task, 64),  // len=64, hitting this limit will just make async tasks wait.
+		externalCh:   make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
+		internalCh:   make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
+		completionCh: make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
+		dispatchCh:   make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
 		ctx:          ctx,
 		cancelFn:     cancel,
 	}
 
 	dagst.wg.Add(1)
 	go dagst.control()
+
+	dagst.wg.Add(1)
+	go dagst.dispatcher()
 
 	return dagst, nil
 }
@@ -172,17 +181,19 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return err
 	}
 
+	w := &waiter{outCh: out, ctx: ctx}
+
 	// add the shard to the shard catalogue, and drop the lock.
 	s := &Shard{
 		key:       key,
 		state:     ShardStateNew,
 		mount:     upgraded,
-		wRegister: &waiter{outCh: out, ctx: ctx},
+		wRegister: w,
 	}
 	d.shards[key] = s
 	d.lk.Unlock()
 
-	tsk := &Task{Ctx: ctx, Op: OpShardRegister, Shard: s, Resp: out}
+	tsk := &task{op: OpShardRegister, shard: s, waiter: w}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -198,7 +209,7 @@ func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan Sha
 	}
 	d.lk.Unlock()
 
-	tsk := &Task{Ctx: ctx, Op: OpShardDestroy, Shard: s, Resp: out}
+	tsk := &task{op: OpShardDestroy, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -224,7 +235,7 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	}
 	d.lk.Unlock()
 
-	tsk := &Task{Ctx: ctx, Op: OpShardAcquire, Shard: s, Resp: out}
+	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -234,7 +245,7 @@ func (d *DAGStore) Close() error {
 	return nil
 }
 
-func (d *DAGStore) queueTask(tsk *Task, ch chan<- *Task) error {
+func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
 	select {
 	case <-d.ctx.Done():
 		return fmt.Errorf("dag store closed")
