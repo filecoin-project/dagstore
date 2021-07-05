@@ -36,7 +36,7 @@ func Upgrade(underlying Mount, initial string) (*Upgrader, error) {
 	if !info.AccessSequential {
 		return nil, fmt.Errorf("underlying mount must support sequential access")
 	}
-	if info.AccessSequential && info.AccessSeek && info.AccessRandom {
+	if info.AccessSeek && info.AccessRandom {
 		ret.passthrough = true
 		return ret, nil
 	}
