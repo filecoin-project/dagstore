@@ -8,35 +8,36 @@ import (
 	"sync"
 )
 
-// Upgrader serves as a bridge to upgrade a Mount into one with full-featured
-// Reader capabilities. It does this by caching a transient copy as file if
-// the original mount type does not support all access patterns.
+// Upgrader is a bridge to upgrade any Mount into one with full-featured
+// Reader capabilities, whether the original mount is of remote or local kind.
+// It does this by managing a local transient copy.
 //
-// If the underlying mount is already fully-featured, the Upgrader is
-// acts as a noop.
-//
-// TODO perform refcounts so we can track inactive transient files.
-// TODO provide root directory for temp files (or better: temp file factory function).
+// If the underlying mount is fully-featured, the Upgrader has no effect, and
+// simply passes through to the underlying mount.
 type Upgrader struct {
 	underlying  Mount
 	passthrough bool
 
 	lk        sync.Mutex
 	transient string
-	// TODO refs int
+	rootdir   string
 }
 
 var _ Mount = (*Upgrader)(nil)
 
-// Upgrade constructs a new Upgrader for the underlying Mount.
-func Upgrade(underlying Mount, initial string) (*Upgrader, error) {
-	ret := &Upgrader{underlying: underlying}
-
-	info := underlying.Info()
-	if !info.AccessSequential {
-		return nil, fmt.Errorf("underlying mount must support sequential access")
+// Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
+// will reuse the file in path `initial` as the initial transient copy. Whenever
+// a new transient copy has to be created, it will be created under `rootdir`.
+func Upgrade(underlying Mount, rootdir, initial string) (*Upgrader, error) {
+	ret := &Upgrader{underlying: underlying, rootdir: rootdir}
+	if ret.rootdir == "" {
+		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
-	if info.AccessSeek && info.AccessRandom {
+
+	switch info := underlying.Info(); {
+	case !info.AccessSequential:
+		return nil, fmt.Errorf("underlying mount must support sequential access")
+	case info.AccessSeek && info.AccessRandom:
 		ret.passthrough = true
 		return ret, nil
 	}
@@ -94,6 +95,15 @@ func (u *Upgrader) Stat(ctx context.Context) (Stat, error) {
 	return u.underlying.Stat(ctx)
 }
 
+// TransientPath returns the local path of the transient file. If the Upgrader
+// is passthrough, the return value will be "".
+func (u *Upgrader) TransientPath() string {
+	u.lk.Lock()
+	defer u.lk.Unlock()
+
+	return u.transient
+}
+
 func (u *Upgrader) Close() error {
 	panic("implement me")
 }
@@ -102,7 +112,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	if u.transient != "" {
 		_ = os.Remove(u.transient)
 	}
-	file, err := os.CreateTemp("dagstore", "transient")
+	file, err := os.CreateTemp(u.rootdir, "transient")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file: %w", err)
 	}
@@ -131,30 +141,22 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	return nil
 }
 
-//
-// // Clean removes any transient assets.
-// func (m *Upgrader) Clean() error {
-// 	s.Lock()
-// 	defer s.Unlock()
-//
-// 	// check if we have readers and refuse to clean if so.
-// 	if s.refs != 0 {
-// 		return fmt.Errorf("failed to delete shard: %w", ErrShardInUse)
-// 	}
-//
-// 	if s.transient == nil {
-// 		// nothing to do.
-// 		return nil
-// 	}
-//
-// 	// we can safely remove the transient.
-// 	_ = s.transient.Close()
-// 	err := os.Remove(s.transient.Name())
-// 	if err == nil {
-// 		s.transient = nil
-// 	}
-//
-// 	// refresh the availability.
-// 	_, _ = s.refreshAvailability(nil)
-// 	return nil
-// }
+// DeleteTransient deletes the transient associated with this Upgrader, if
+// one exists. It is the caller's responsibility to ensure the transient is
+// not in use.
+func (u *Upgrader) DeleteTransient() error {
+	u.lk.Lock()
+	defer u.lk.Unlock()
+
+	if u.transient == "" {
+		return nil // nothing to do.
+	}
+
+	err := os.Remove(u.transient)
+	if err != nil {
+		return err
+	}
+
+	u.transient = ""
+	return nil
+}

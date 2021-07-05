@@ -11,6 +11,7 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
+	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/ipld/go-car/v2"
 
@@ -50,8 +51,8 @@ func init() {
 func TestRegisterCarV1(t *testing.T) {
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
-		ScratchSpaceDir: dir,
-		Datastore:       datastore.NewMapDatastore(),
+		TransientsDir: dir,
+		Datastore:     datastore.NewMapDatastore(),
 	})
 	require.NoError(t, err)
 
@@ -70,8 +71,8 @@ func TestRegisterCarV1(t *testing.T) {
 func TestRegisterCarV2(t *testing.T) {
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
-		ScratchSpaceDir: dir,
-		Datastore:       datastore.NewMapDatastore(),
+		TransientsDir: dir,
+		Datastore:     datastore.NewMapDatastore(),
 	})
 	require.NoError(t, err)
 
@@ -89,9 +90,10 @@ func TestRegisterCarV2(t *testing.T) {
 func TestRegisterConcurrentShards(t *testing.T) {
 	run := func(t *testing.T, n int) {
 		dir := t.TempDir()
+		store := dssync.MutexWrap(datastore.NewMapDatastore())
 		dagst, err := NewDAGStore(Config{
-			ScratchSpaceDir: dir,
-			Datastore:       datastore.NewMapDatastore(),
+			TransientsDir: dir,
+			Datastore:     store,
 		})
 		require.NoError(t, err)
 
@@ -122,8 +124,8 @@ func TestRegisterConcurrentShards(t *testing.T) {
 func TestAcquireInexistentShard(t *testing.T) {
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
-		ScratchSpaceDir: dir,
-		Datastore:       datastore.NewMapDatastore(),
+		TransientsDir: dir,
+		Datastore:     datastore.NewMapDatastore(),
 	})
 	require.NoError(t, err)
 
@@ -138,8 +140,8 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
-		ScratchSpaceDir: dir,
-		Datastore:       datastore.NewMapDatastore(),
+		TransientsDir: dir,
+		Datastore:     datastore.NewMapDatastore(),
 	})
 	require.NoError(t, err)
 
@@ -175,9 +177,10 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 
 func TestConcurrentAcquires(t *testing.T) {
 	dir := t.TempDir()
+	store := dssync.MutexWrap(datastore.NewMapDatastore())
 	dagst, err := NewDAGStore(Config{
-		ScratchSpaceDir: dir,
-		Datastore:       datastore.NewMapDatastore(),
+		TransientsDir: dir,
+		Datastore:     store,
 	})
 	require.NoError(t, err)
 
@@ -215,6 +218,10 @@ func TestConcurrentAcquires(t *testing.T) {
 			})
 		}
 		require.NoError(t, grp.Wait())
+		// res, err := store.Query(dsq.Query{})
+		// require.NoError(t, err)
+		// rest, err := res.Rest()
+		// require.NoError(t, err)
 	}
 
 	t.Run("1", func(t *testing.T) { run(t, 1) })

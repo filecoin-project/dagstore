@@ -37,5 +37,5 @@ type Shard struct {
 	wAcquire  []*waiter
 	wDestroy  *waiter
 
-	refs uint32 // count of DAG accessors currently open
+	refs uint32 // number of DAG accessors currently open
 }

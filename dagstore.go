@@ -11,6 +11,7 @@ import (
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 	ds "github.com/ipfs/go-datastore"
+	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
 )
 
@@ -39,6 +40,7 @@ type DAGStore struct {
 	shards  map[shard.Key]*Shard
 	config  Config
 	indices index.FullIndexRepo
+	store   ds.Datastore
 
 	// externalCh receives external tasks.
 	externalCh chan *task
@@ -78,9 +80,9 @@ type Result struct {
 }
 
 type Config struct {
-	// ScrapRoot is the path to the scratch space, where local copies of
-	// remote mounts are saved.
-	ScratchSpaceDir string
+	// TransientsDir is the path to directory where local transient files will
+	// be created for remote mounts.
+	TransientsDir string
 
 	// IndexDir is the path where indices are stored.
 	IndexDir string
@@ -96,10 +98,10 @@ type Config struct {
 // NewDAGStore constructs a new DAG store with the supplied configuration.
 func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// validate and manage scratch root directory.
-	if cfg.ScratchSpaceDir == "" {
+	if cfg.TransientsDir == "" {
 		return nil, fmt.Errorf("missing scratch area root path")
 	}
-	if err := ensureDir(cfg.ScratchSpaceDir); err != nil {
+	if err := ensureDir(cfg.TransientsDir); err != nil {
 		return nil, fmt.Errorf("failed to create scratch root dir: %w", err)
 	}
 
@@ -122,7 +124,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// handle the datastore.
 	if cfg.Datastore == nil {
 		log.Warnf("no datastore provided; falling back to in-mem datastore; shard state will not survive restarts")
-		cfg.Datastore = ds.NewMapDatastore()
+		cfg.Datastore = dssync.MutexWrap(ds.NewMapDatastore()) // TODO can probably remove mutex wrap, since access is single-threaded
 	}
 
 	// create the registry and register all mount types.
@@ -141,6 +143,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		config:       cfg,
 		indices:      indices,
 		shards:       make(map[shard.Key]*Shard),
+		store:        cfg.Datastore,
 		externalCh:   make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
 		internalCh:   make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
 		completionCh: make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
@@ -160,7 +163,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 type RegisterOpts struct {
 	// ExistingTransient can be supplied when registering a shard to indicate that
-	// there's already an existing local transient local that can be used for
+	// there's already an existing local transient copy that can be used for
 	// indexing.
 	ExistingTransient string
 }
@@ -177,7 +180,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
-	upgraded, err := mount.Upgrade(mnt, opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, opts.ExistingTransient, d.config.TransientsDir)
 	if err != nil {
 		d.lk.Unlock()
 		return err

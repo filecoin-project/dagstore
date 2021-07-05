@@ -36,7 +36,8 @@ func (d *DAGStore) control() {
 	for ; err == nil; tsk, err = d.consumeNext() {
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
-		switch s := tsk.shard; tsk.op {
+		s := tsk.shard
+		switch tsk.op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
@@ -75,6 +76,7 @@ func (d *DAGStore) control() {
 
 			s.state = ShardStateServing
 			s.refs++
+
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
@@ -138,6 +140,11 @@ func (d *DAGStore) control() {
 			d.lk.RUnlock()
 			res := &Result{respAllShardsInfo: info}
 			d.sendResult(res, tsk.waiter)
+		}
+
+		// persist the current shard state.
+		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
+			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 		}
 	}
 

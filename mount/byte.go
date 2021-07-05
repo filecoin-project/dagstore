@@ -13,7 +13,7 @@ type BytesMount struct {
 
 var _ Mount = (*BytesMount)(nil)
 
-func (b *BytesMount) Fetch(ctx context.Context) (Reader, error) {
+func (b *BytesMount) Fetch(_ context.Context) (Reader, error) {
 	r := bytes.NewReader(b.Bytes)
 	return &NopCloser{
 		Reader:   r,
@@ -24,7 +24,7 @@ func (b *BytesMount) Fetch(ctx context.Context) (Reader, error) {
 
 func (b *BytesMount) Info() Info {
 	u := &url.URL{
-		Scheme: "memory",
+		Scheme: "bytes",
 		Host:   base64.StdEncoding.EncodeToString(b.Bytes),
 	}
 	return Info{
@@ -36,7 +36,7 @@ func (b *BytesMount) Info() Info {
 	}
 }
 
-func (b *BytesMount) Stat(ctx context.Context) (Stat, error) {
+func (b *BytesMount) Stat(_ context.Context) (Stat, error) {
 	return Stat{
 		Exists: true,
 		Size:   int64(len(b.Bytes)),
