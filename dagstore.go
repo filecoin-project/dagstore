@@ -55,58 +55,6 @@ type DAGStore struct {
 	wg       sync.WaitGroup
 }
 
-type ShardState int
-
-const (
-	// ShardStateNew indicates that a shard has just been registered and is
-	// about to be processed.
-	ShardStateNew ShardState = iota
-
-	// ShardStateFetching indicates that we're fetching the shard data from
-	// a remote mount.
-	ShardStateFetching
-
-	// ShardStateFetched indicates that we're fetching the shard data from
-	// a remote mount.
-	ShardStateFetched
-
-	// ShardStateIndexing indicates that we are indexing the shard.
-	ShardStateIndexing
-
-	// ShardStateAvailable indicates that the shard has been initialized and is
-	// active for serving queries.
-	ShardStateAvailable
-
-	ShardStateServing
-
-	// ShardStateErrored indicates that an unexpected error was encountered
-	// during a shard operation, and therefore the shard needs to be recovered.
-	ShardStateErrored
-
-	// ShardStateUnknown indicates that it's not possible to determine the state
-	// of the shard, because an internal error occurred.
-	ShardStateUnknown
-)
-
-// Shard encapsulates the state of a shard inside the DAG store.
-type Shard struct {
-	sync.RWMutex
-
-	// immutable, can be read outside the lock.
-	key   shard.Key
-	mount *mount.Upgrader
-
-	wRegister chan ShardResult
-	wAcquire  []chan ShardResult
-	wDestroy  chan ShardResult // TODO implement destroy wait
-
-	state   ShardState
-	err     error // populated if shard state is errored.
-	indexed bool
-
-	refs uint32 // count of DAG accessors currently open
-}
-
 type OpType int
 
 const (
@@ -244,10 +192,9 @@ type RegisterOpts struct {
 
 // RegisterShard initiates the registration of a new shard.
 //
-// This method performs preliminary validation and returns an error if it fails.
-//
-// A nil return value implies that the request for registration has
-// been accepted, and the caller should monitor the out channel for a result.
+// This method returns an error synchronously if preliminary validation fails.
+// Otherwise, it queues the shard for registration. The caller should monitor
+// supplied channel for a result.
 func (d *DAGStore) RegisterShard(key shard.Key, mnt mount.Mount, out chan ShardResult, opts RegisterOpts) error {
 	d.lk.Lock()
 	if _, ok := d.shards[key]; ok {
@@ -321,7 +268,6 @@ func (d *DAGStore) control() {
 		log.Infow("processing task", "op", tsk.Op, "shard", tsk.Shard.key)
 
 		s := tsk.Shard
-		s.Lock()
 
 		switch tsk.Op {
 		case OpShardRegister:
@@ -464,8 +410,6 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 		}
-
-		s.Unlock()
 	}
 
 	if err != context.Canceled {
