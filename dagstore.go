@@ -544,42 +544,6 @@ func loadIndex(reader mount.Reader) (carindex.Index, error) {
 		return idx, nil
 	}
 	return nil, fmt.Errorf("processing of unindexed cars unimplemented")
-
-	//
-	// // read the CAR version.
-	// ver, err := car.ReadVersion(reader)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to read car version: %w", err)
-	// }
-	//
-	// switch ver {
-	// case 2:
-	// 	// this a carv2, we need to look at the index to find out if it
-	// 	// carries an inline index or not.
-	// 	var header car.Header
-	// 	if _, err := header.ReadFrom(reader); err != nil {
-	// 		return nil, fmt.Errorf("failed to read carv2 header: %w", err)
-	// 	}
-	// 	if header.HasIndex() {
-	// 		// this CARv2 has an index, let's extract it.
-	// 		offset := int64(header.IndexOffset)
-	// 		_, err := reader.Seek(offset, 0)
-	// 		if err != nil {
-	// 			return nil, fmt.Errorf("failed to seek to carv2 index (offset: %d): %w", offset, err)
-	// 		}
-	// 		idx, err := carindex.ReadFrom(reader)
-	// 		if err != nil {
-	// 			return nil, fmt.Errorf("failed to read carv2 index: %w", err)
-	// 		}
-	// 		return idx, nil
-	// 	} else {
-	// 		return nil, fmt.Errorf("processing of non-indexed carv2 not implemented yet") // TODO implement
-	// 	}
-	// case 1:
-	// 	return nil, fmt.Errorf("processing of carv1 not implemented yet") // TODO implement
-	// default:
-	// 	return nil, fmt.Errorf("unrecognized car version: %d", ver)
-	// }
 }
 
 // ensureDir checks whether the specified path is a directory, and if not it
