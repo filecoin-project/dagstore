@@ -3,8 +3,6 @@ package dagstore
 import (
 	"context"
 	"fmt"
-
-	"github.com/filecoin-project/dagstore/mount"
 )
 
 // control runs the DAG store's event loop.
@@ -14,73 +12,20 @@ func (d *DAGStore) control() {
 	tsk, err := d.consumeNext()
 	for ; err == nil; tsk, err = d.consumeNext() {
 		// TODO lower to debug before release
-		log.Infow("processing task", "op", tsk.Op, "shard", tsk.Shard.key)
+		log.Infow("processing task", "op", tsk.Op, "shard", tsk.Shard.key, "error", tsk.Error)
 
-		s := tsk.Shard
-
-		switch tsk.Op {
+		switch s := tsk.Shard; tsk.Op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
+				// sanity check failed
 				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
 				_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.internalCh)
 				break
 			}
-			// queue a fetch.
-			_ = d.queueTask(&Task{Op: OpShardFetch, Shard: tsk.Shard}, d.internalCh)
 
-		case OpShardFetch:
-			s.state = ShardStateFetching
+			s.state = ShardStateInitializing
 
-			go func(ctx context.Context, upgrader *mount.Upgrader) {
-				// ensure a copy is available locally.
-				reader, err := upgrader.Fetch(ctx)
-				if err != nil {
-					err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-					_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.completionCh)
-					return
-				}
-				_ = reader.Close()
-				_ = d.queueTask(&Task{Op: OpShardFetchDone, Shard: tsk.Shard}, d.completionCh)
-			}(d.ctx, s.mount)
-
-		case OpShardFetchDone:
-			s.state = ShardStateFetched
-			if !s.indexed {
-				// shard isn't indexed yet, so let's index.
-				_ = d.queueTask(&Task{Op: OpShardIndex, Shard: tsk.Shard}, d.internalCh)
-				break
-			}
-			// shard is indexed, we're ready to serve requests.
-			_ = d.queueTask(&Task{Op: OpShardMakeAvailable, Shard: tsk.Shard}, d.internalCh)
-
-		case OpShardIndex:
-			s.state = ShardStateIndexing
-			go func(ctx context.Context, mnt mount.Mount) {
-				reader, err := mnt.Fetch(ctx)
-				if err != nil {
-					err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-					_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.completionCh)
-					return
-				}
-				defer reader.Close()
-
-				idx, err := loadIndexAsync(reader)
-				if err != nil {
-					err = fmt.Errorf("failed to index shard: %w", err)
-					_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.completionCh)
-					return
-				}
-				_ = d.queueTask(&Task{Op: OpShardIndexDone, Shard: tsk.Shard, Index: idx}, d.completionCh)
-			}(d.ctx, s.mount)
-
-		case OpShardIndexDone:
-			err := d.indices.AddFullIndex(s.key, tsk.Index)
-			if err != nil {
-				err = fmt.Errorf("failed to add index for shard: %w", err)
-				_ = d.queueTask(&Task{Op: OpShardFail, Shard: tsk.Shard, Error: err}, d.internalCh)
-				break
-			}
-			_ = d.queueTask(&Task{Op: OpShardMakeAvailable, Shard: tsk.Shard}, d.internalCh)
+			go d.initializeAsync(tsk.Ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
 			if s.wRegister != nil {
@@ -94,7 +39,7 @@ func (d *DAGStore) control() {
 			// trigger queued acquisition waiters.
 			for _, acqCh := range s.wAcquire {
 				s.refs++
-				go d.acquireAsync(acqCh, s, s.mount)
+				go d.acquireAsync(tsk.Ctx, acqCh, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
@@ -107,7 +52,7 @@ func (d *DAGStore) control() {
 
 			s.state = ShardStateServing
 			s.refs++
-			go d.acquireAsync(tsk.Resp, s, s.mount)
+			go d.acquireAsync(tsk.Ctx, tsk.Resp, s, s.mount)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {

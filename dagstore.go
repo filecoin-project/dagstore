@@ -56,6 +56,7 @@ type DAGStore struct {
 
 // Task represents an operation to be performed on a shard or the DAG store.
 type Task struct {
+	Ctx   context.Context // context governing the operation if this is an external op.
 	Op    OpType
 	Shard *Shard
 	Resp  chan ShardResult
@@ -139,7 +140,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		config:       cfg,
 		indices:      indices,
 		shards:       make(map[shard.Key]*Shard),
-		externalCh:   make(chan *Task, 128), // len=128, concurrent external tasks that can be queued up before putting backpressure.
+		externalCh:   make(chan *Task, 128), // len=128, concurrent external tasks that can be queued up before exercising backpressure.
 		internalCh:   make(chan *Task, 1),   // len=1, because eventloop will only ever stage another internal event.
 		completionCh: make(chan *Task, 64),  // len=64, hitting this limit will just make async tasks wait.
 		ctx:          ctx,
@@ -165,7 +166,7 @@ type RegisterOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for registration. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) RegisterShard(key shard.Key, mnt mount.Mount, out chan ShardResult, opts RegisterOpts) error {
+func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.Mount, out chan ShardResult, opts RegisterOpts) error {
 	d.lk.Lock()
 	if _, ok := d.shards[key]; ok {
 		d.lk.Unlock()
@@ -179,32 +180,32 @@ func (d *DAGStore) RegisterShard(key shard.Key, mnt mount.Mount, out chan ShardR
 	}
 
 	// add the shard to the shard catalogue, and drop the lock.
-	shrd := &Shard{
+	s := &Shard{
 		key:       key,
 		state:     ShardStateNew,
 		mount:     upgraded,
 		wRegister: out,
 	}
-	d.shards[key] = shrd
+	d.shards[key] = s
 	d.lk.Unlock()
 
-	tsk := &Task{Op: OpShardRegister, Shard: shrd, Resp: out}
+	tsk := &Task{Ctx: ctx, Op: OpShardRegister, Shard: s, Resp: out}
 	return d.queueTask(tsk, d.externalCh)
 }
 
 type DestroyOpts struct {
 }
 
-func (d *DAGStore) DestroyShard(key shard.Key, out chan ShardResult, _ DestroyOpts) error {
+func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan ShardResult, _ DestroyOpts) error {
 	d.lk.Lock()
-	shrd, ok := d.shards[key]
+	s, ok := d.shards[key]
 	if !ok {
 		d.lk.Unlock()
 		return ErrShardUnknown // TODO: encode shard key
 	}
 	d.lk.Unlock()
 
-	tsk := &Task{Op: OpShardDestroy, Shard: shrd, Resp: out}
+	tsk := &Task{Ctx: ctx, Op: OpShardDestroy, Shard: s, Resp: out}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -221,16 +222,16 @@ type AcquireOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) AcquireShard(key shard.Key, out chan ShardResult, _ AcquireOpts) error {
+func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
 	d.lk.Lock()
-	shrd, ok := d.shards[key]
+	s, ok := d.shards[key]
 	if !ok {
 		d.lk.Unlock()
 		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
 	}
 	d.lk.Unlock()
 
-	tsk := &Task{Op: OpShardAcquire, Shard: shrd, Resp: out}
+	tsk := &Task{Ctx: ctx, Op: OpShardAcquire, Shard: s, Resp: out}
 	return d.queueTask(tsk, d.externalCh)
 }
 

@@ -60,7 +60,7 @@ func TestRegisterCarV1(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv1}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv1}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -80,7 +80,7 @@ func TestRegisterCarV2(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -104,7 +104,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 			grp.Go(func() error {
 				ch := make(chan ShardResult, 1)
 				k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
-				err := dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+				err := dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 				if err != nil {
 					return err
 				}
@@ -132,7 +132,7 @@ func TestAcquireInexistentShard(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.AcquireShard(k, ch, AcquireOpts{})
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 	require.Error(t, err)
 }
 
@@ -148,13 +148,13 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
 	require.NoError(t, res.Error)
 
-	err = dagst.AcquireShard(k, ch, AcquireOpts{})
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 	require.NoError(t, err)
 
 	res = <-ch
@@ -186,7 +186,7 @@ func TestConcurrentAcquires(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -197,7 +197,7 @@ func TestConcurrentAcquires(t *testing.T) {
 		for i := 0; i < n; i++ {
 			grp.Go(func() error {
 				ch := make(chan ShardResult, 1)
-				err := dagst.AcquireShard(k, ch, AcquireOpts{})
+				err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 				if err != nil {
 					return err
 				}

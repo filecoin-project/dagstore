@@ -7,16 +7,9 @@ const (
 	// about to be processed for activation.
 	ShardStateNew ShardState = iota
 
-	// ShardStateFetching indicates that we're fetching the shard data from
-	// its mount.
-	ShardStateFetching
-
-	// ShardStateFetched indicates that the shard data has been fetched from
-	// its mount.
-	ShardStateFetched
-
-	// ShardStateIndexing indicates that we are indexing the shard.
-	ShardStateIndexing
+	// ShardStateInitializing indicates that the shard is being initialized
+	// by being fetched from the mount and being indexed.
+	ShardStateInitializing
 
 	// ShardStateAvailable indicates that the shard has been initialized and is
 	// active for serving queries. There are no active shard readers.
