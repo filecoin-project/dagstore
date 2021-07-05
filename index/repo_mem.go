@@ -72,7 +72,7 @@ func (m *MemIndexRepo) ForEach(f func(shard.Key) (bool, error)) error {
 	m.lk.RLock()
 	ks := make([]shard.Key, 0, len(m.idxs))
 	for k := range m.idxs {
-		ks = append(ks, shard.Key(k))
+		ks = append(ks, k)
 	}
 	m.lk.RUnlock()
 
@@ -121,7 +121,7 @@ func (m *MemIndexRepo) indexSize(k shard.Key) (uint64, error) {
 	// Could optimize by memoizing this although I don't think it's necessary
 	// as the memory index repo is likely only used in tests.
 	var buff bytes.Buffer
-	err := idx.Marshal(&buff)
+	err := index.WriteTo(idx, &buff)
 	if err != nil {
 		return 0, err
 	}

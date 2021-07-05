@@ -6,6 +6,7 @@ import (
 
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
+	carindex "github.com/ipld/go-car/v2/index"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -43,10 +44,13 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
-	offset1 := int64(10)
-	k := shard.NewKey("shard-key-1")
-	idx := NewMockFullIndex()
-	idx.Set(cid1, offset1)
+	offset1 := uint64(10)
+	k := shard.KeyFromString("shard-key-1")
+
+	// make an index
+	idx := carindex.BuildersByCodec[carindex.IndexSorted]()
+	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
+	require.NoError(t, err)
 
 	// Create a repo at the base path
 	repo1, err := NewFSRepo(basePath)
@@ -64,7 +68,7 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 	fidx, err := repo2.GetFullIndex(k)
 	require.NoError(t, err)
 
-	offset, err := fidx.Offset(cid1)
+	offset, err := fidx.Get(cid1)
 	require.NoError(t, err)
 	require.Equal(t, offset1, offset)
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/filecoin-project/dagstore/shard"
-	"github.com/ipld/go-car/v2/index"
+	carindex "github.com/ipld/go-car/v2/index"
 
 	"golang.org/x/xerrors"
 )
@@ -58,7 +58,7 @@ func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 	return l, nil
 }
 
-func (l *FSIndexRepo) GetFullIndex(key shard.Key) (index.Index, error) {
+func (l *FSIndexRepo) GetFullIndex(key shard.Key) (carindex.Index, error) {
 	path := l.indexPath(key)
 
 	f, err := os.Open(path)
@@ -68,10 +68,10 @@ func (l *FSIndexRepo) GetFullIndex(key shard.Key) (index.Index, error) {
 
 	defer f.Close()
 
-	return index.ReadFrom(f)
+	return carindex.ReadFrom(f)
 }
 
-func (l *FSIndexRepo) AddFullIndex(key shard.Key, index index.Index) (err error) {
+func (l *FSIndexRepo) AddFullIndex(key shard.Key, index carindex.Index) (err error) {
 	// Create a file at the key path
 	f, err := os.Create(l.indexPath(key))
 	if err != nil {
@@ -80,7 +80,7 @@ func (l *FSIndexRepo) AddFullIndex(key shard.Key, index index.Index) (err error)
 	defer f.Close()
 
 	// Write the index to the file
-	return index.Marshal(f)
+	return carindex.WriteTo(index, f)
 }
 
 func (l *FSIndexRepo) DropFullIndex(key shard.Key) (dropped bool, err error) {

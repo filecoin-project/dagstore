@@ -3,6 +3,7 @@ package index
 import (
 	"bytes"
 
+	carindex "github.com/ipld/go-car/v2/index"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/dagstore/shard"
@@ -24,10 +25,13 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 
 	cid1, err := cid.Parse("bafykbzaceaeqhm77anl5mv2wjkmh4ofyf6s6eww3ujfmhtsfab65vi3rlccaq")
 	require.NoError(t, err)
-	offset1 := int64(10)
-	k := shard.Key("shard-key-1")
-	idx := NewMockFullIndex()
-	idx.Set(cid1, offset1)
+	offset1 := uint64(10)
+	k := shard.KeyFromString("shard-key-1")
+
+	// make an index
+	idx := carindex.BuildersByCodec[carindex.IndexSorted]()
+	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
+	require.NoError(t, err)
 
 	// Verify that an empty repo has zero size
 	stat, err := r.StatFullIndex(k)
@@ -35,8 +39,8 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.False(t, stat.Exists)
 	require.EqualValues(t, 0, stat.Size)
 
-	len, err := r.Len()
-	require.EqualValues(t, 0, len)
+	l, err := r.Len()
+	require.EqualValues(t, 0, l)
 
 	size, err := r.Size()
 	require.EqualValues(t, 0, size)
@@ -49,12 +53,12 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	err = r.AddFullIndex(k, idx)
 	require.NoError(t, err)
 
-	len, err = r.Len()
-	require.EqualValues(t, 1, len)
+	l, err = r.Len()
+	require.EqualValues(t, 1, l)
 
 	// Verify the size of the index is correct
 	var b bytes.Buffer
-	err = idx.Marshal(&b)
+	err = carindex.WriteTo(idx, &b)
 	require.NoError(t, err)
 	expStatSize := b.Len()
 
@@ -68,7 +72,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 
 	count := 0
 	err = r.ForEach(func(key shard.Key) (bool, error) {
-		if !bytes.Equal(key, k) {
+		if key != k {
 			return false, xerrors.Errorf("for each returned wrong key")
 		}
 		count++
@@ -81,7 +85,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	fidx, err := r.GetFullIndex(k)
 	require.NoError(t, err)
 
-	offset, err := fidx.Offset(cid1)
+	offset, err := fidx.Get(cid1)
 	require.NoError(t, err)
 	require.Equal(t, offset1, offset)
 
@@ -96,8 +100,8 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	require.False(t, stat.Exists)
 	require.EqualValues(t, 0, stat.Size)
 
-	len, err = r.Len()
-	require.EqualValues(t, 0, len)
+	l, err = r.Len()
+	require.EqualValues(t, 0, l)
 
 	size, err = r.Size()
 	require.EqualValues(t, 0, size)
