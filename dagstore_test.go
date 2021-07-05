@@ -104,7 +104,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 			grp.Go(func() error {
 				ch := make(chan ShardResult, 1)
 				k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
-				err = dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+				err := dagst.RegisterShard(k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 				if err != nil {
 					return err
 				}
