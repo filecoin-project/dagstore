@@ -16,10 +16,6 @@ import (
 	carindex "github.com/ipld/go-car/v2/index"
 )
 
-// TODO implement ReleaseShard when the ShardAccessor is closed.
-// TODO ability to recover from a failed init.
-// TODO managing transients
-
 var log = logging.Logger("dagstore")
 
 var (
@@ -58,9 +54,6 @@ type DAGStore struct {
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
 }
-
-// TODO implement transient local abstraction / scratch area
-// TODO figure out how to heal/treat failed/unavailable shards -- notify application?
 
 type ShardState int
 
@@ -305,7 +298,8 @@ type AcquireOpts struct {
 // ShardAccessor, an object that enables various patterns of access to the data
 // contained within the shard.
 //
-// If the shard is not active, it will be reactivated. That could mean
+// This operation may resolve near-instantaneosly if the shard is available
+// locally. If not, it
 func (d *DAGStore) AcquireShard(key shard.Key, out chan ShardResult, _ AcquireOpts) error {
 	d.lk.Lock()
 	shrd, ok := d.shards[key]
