@@ -112,12 +112,6 @@ type Shard struct {
 	indexed bool
 
 	refs uint32 // count of DAG accessors currently open
-
-}
-
-func (s *Shard) failShard(err error) {
-	s.state = ShardStateErrored
-	s.err = err
 }
 
 type OpType int
