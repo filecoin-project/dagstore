@@ -410,6 +410,7 @@ func (d *DAGStore) control() {
 
 			// trigger queued acquisition waiters.
 			for _, acqCh := range s.wAcquire {
+				s.refs++
 				go d.acquireAsync(acqCh, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
