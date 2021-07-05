@@ -12,10 +12,10 @@ import (
 type waiter struct {
 	// context governing the operation if this is an external op.
 	ctx   context.Context
-	outCh chan ShardResult
+	outCh chan Result
 }
 
-func (w waiter) deliver(res *ShardResult) {
+func (w waiter) deliver(res *Result) {
 	select {
 	case w.outCh <- *res:
 	case <-w.ctx.Done():
@@ -24,7 +24,7 @@ func (w waiter) deliver(res *ShardResult) {
 
 // Shard encapsulates the state of a shard within the DAG store.
 type Shard struct {
-	// IMMUTABLE FIELDS: safe to read outside the event loop.
+	// IMMUTABLE FIELDS: safe to read outside the event loop without a lock.
 	key   shard.Key
 	mount *mount.Upgrader
 

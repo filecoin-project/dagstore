@@ -55,7 +55,7 @@ func TestRegisterCarV1(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan ShardResult, 1)
+	ch := make(chan Result, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv1}, ch, RegisterOpts{})
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestRegisterCarV2(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan ShardResult, 1)
+	ch := make(chan Result, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
@@ -99,7 +99,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 		for i := 0; i < n; i++ {
 			i := i
 			grp.Go(func() error {
-				ch := make(chan ShardResult, 1)
+				ch := make(chan Result, 1)
 				k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
 				err := dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 				if err != nil {
@@ -127,7 +127,7 @@ func TestAcquireInexistentShard(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan ShardResult, 1)
+	ch := make(chan Result, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 	require.Error(t, err)
@@ -143,7 +143,7 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan ShardResult, 1)
+	ch := make(chan Result, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestConcurrentAcquires(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan ShardResult, 1)
+	ch := make(chan Result, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestConcurrentAcquires(t *testing.T) {
 		grp, _ := errgroup.WithContext(context.Background())
 		for i := 0; i < n; i++ {
 			grp.Go(func() error {
-				ch := make(chan ShardResult, 1)
+				ch := make(chan Result, 1)
 				err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 				if err != nil {
 					return err
