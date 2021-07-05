@@ -177,7 +177,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		key:       key,
 		state:     ShardStateNew,
 		mount:     upgraded,
-		wRegister: out,
+		wRegister: &waiter{outCh: out, ctx: ctx},
 	}
 	d.shards[key] = s
 	d.lk.Unlock()

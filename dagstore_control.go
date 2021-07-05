@@ -11,8 +11,7 @@ func (d *DAGStore) control() {
 
 	tsk, err := d.consumeNext()
 	for ; err == nil; tsk, err = d.consumeNext() {
-		// TODO lower to debug before release
-		log.Infow("processing task", "op", tsk.Op, "shard", tsk.Shard.key, "error", tsk.Error)
+		log.Debugw("processing task", "op", tsk.Op, "shard", tsk.Shard.key, "error", tsk.Error)
 
 		switch s := tsk.Shard; tsk.Op {
 		case OpShardRegister:
@@ -30,29 +29,30 @@ func (d *DAGStore) control() {
 		case OpShardMakeAvailable:
 			if s.wRegister != nil {
 				res := ShardResult{Key: s.key}
-				go func(ch chan ShardResult) { ch <- res }(s.wRegister)
+				go s.wRegister.dispatch(res)
 				s.wRegister = nil
 			}
 
 			s.state = ShardStateAvailable
 
 			// trigger queued acquisition waiters.
-			for _, acqCh := range s.wAcquire {
+			for _, w := range s.wAcquire {
 				s.refs++
-				go d.acquireAsync(tsk.Ctx, acqCh, s, s.mount)
+				go d.acquireAsync(tsk.Ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
+			w := &waiter{ctx: tsk.Ctx, outCh: tsk.Resp}
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
-				s.wAcquire = append(s.wAcquire, tsk.Resp)
+				s.wAcquire = append(s.wAcquire, w)
 				break
 			}
 
 			s.state = ShardStateServing
 			s.refs++
-			go d.acquireAsync(tsk.Ctx, tsk.Resp, s, s.mount)
+			go d.acquireAsync(tsk.Ctx, w, s, s.mount)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
@@ -71,7 +71,7 @@ func (d *DAGStore) control() {
 					Key:   s.key,
 					Error: fmt.Errorf("failed to register shard: %w", tsk.Error),
 				}
-				go func(ch chan ShardResult) { ch <- res }(s.wRegister)
+				go s.wRegister.dispatch(res)
 			}
 
 			// fail waiting acquirers.
@@ -81,8 +81,8 @@ func (d *DAGStore) control() {
 					Key:   s.key,
 					Error: fmt.Errorf("failed to acquire shard: %w", tsk.Error),
 				}
-				for _, acqCh := range s.wAcquire {
-					go func(ch chan ShardResult) { ch <- res }(acqCh)
+				for _, w := range s.wAcquire {
+					w.dispatch(res)
 				}
 				s.wAcquire = s.wAcquire[:0] // empty acquirers.
 			}

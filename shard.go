@@ -1,9 +1,25 @@
 package dagstore
 
 import (
+	"context"
+
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 )
+
+// waiter encapsulates a context passed by the user, and the channel they want
+// the result returned to.
+type waiter struct {
+	ctx   context.Context
+	outCh chan ShardResult
+}
+
+func (w waiter) dispatch(res ShardResult) {
+	select {
+	case <-w.ctx.Done():
+	case w.outCh <- res:
+	}
+}
 
 // Shard encapsulates the state of a shard within the DAG store.
 type Shard struct {
@@ -12,13 +28,13 @@ type Shard struct {
 	mount *mount.Upgrader
 
 	// MUTABLE FIELDS: cannot read/write outside event loop.
-	wRegister chan ShardResult
-	wAcquire  []chan ShardResult
-	wDestroy  chan ShardResult // TODO implement destroy wait
-
 	state   ShardState
 	err     error // populated if shard state is errored.
 	indexed bool
+
+	wRegister *waiter
+	wAcquire  []*waiter
+	wDestroy  *waiter
 
 	refs uint32 // count of DAG accessors currently open
 }
