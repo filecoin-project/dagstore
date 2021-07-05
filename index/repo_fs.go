@@ -5,11 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/xerrors"
-
-	"github.com/mr-tron/base58"
-
 	"github.com/filecoin-project/dagstore/shard"
+	carindex "github.com/ipld/go-car/v2/index"
+
+	"golang.org/x/xerrors"
 )
 
 const (
@@ -17,17 +16,13 @@ const (
 	indexSuffix = ".full.idx"
 )
 
-// FullIndexFactory provides a mechanism to load a FullIndex from a file path
-type FullIndexFactory interface {
-	// Build returns a FullIndex loaded from the given path
-	Build(path string) (FullIndex, error)
-}
-
 // FSIndexRepo implements FullIndexRepo using the local file system to store
 // the indices
 type FSIndexRepo struct {
 	baseDir string
 }
+
+var _ FullIndexRepo = (*FSIndexRepo)(nil)
 
 // NewFSRepo creates a new index repo that stores indices on the local
 // filesystem with the given base directory as the root
@@ -63,9 +58,7 @@ func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 	return l, nil
 }
 
-func (l *FSIndexRepo) GetFullIndex(key shard.Key) (FullIndex, error) {
-	// TODO: use a registry / factory instead of hard-coding CarFullIndex
-	idx := &CarFullIndex{}
+func (l *FSIndexRepo) GetFullIndex(key shard.Key) (carindex.Index, error) {
 	path := l.indexPath(key)
 
 	f, err := os.Open(path)
@@ -73,36 +66,21 @@ func (l *FSIndexRepo) GetFullIndex(key shard.Key) (FullIndex, error) {
 		return nil, err
 	}
 
-	defer func() {
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
+	defer f.Close()
 
-	err = idx.Unmarshal(f)
-	if err != nil {
-		return nil, err
-	}
-	return idx, nil
+	return carindex.ReadFrom(f)
 }
 
-func (l *FSIndexRepo) AddFullIndex(key shard.Key, index FullIndex) (err error) {
+func (l *FSIndexRepo) AddFullIndex(key shard.Key, index carindex.Index) (err error) {
 	// Create a file at the key path
 	f, err := os.Create(l.indexPath(key))
 	if err != nil {
 		return err
 	}
-
-	defer func() {
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
+	defer f.Close()
 
 	// Write the index to the file
-	return index.Marshal(f)
+	return carindex.WriteTo(index, f)
 }
 
 func (l *FSIndexRepo) DropFullIndex(key shard.Key) (dropped bool, err error) {
@@ -137,11 +115,8 @@ func (l *FSIndexRepo) ForEach(f func(shard.Key) (bool, error)) error {
 		// The file name is derived by base 58 encoding the key
 		// so decode the file name to get the key
 		name := info.Name()
-		b58k := name[:len(name)-len(indexSuffix)]
-		k, err := base58.Decode(b58k)
-		if err != nil {
-			return err
-		}
+		name = name[:len(name)-len(indexSuffix)]
+		k := shard.KeyFromString(name)
 
 		// Call the callback with the key
 		ok, err := f(k)
@@ -161,12 +136,12 @@ func (l *FSIndexRepo) ForEach(f func(shard.Key) (bool, error)) error {
 
 // Len counts all index files in the base path
 func (l *FSIndexRepo) Len() (int, error) {
-	len := 0
+	ret := 0
 	err := l.eachIndexFile(func(info os.FileInfo) error {
-		len++
+		ret++
 		return nil
 	})
-	return len, err
+	return ret, err
 }
 
 // Size sums the size of all index files in the base path
@@ -190,11 +165,9 @@ func (l *FSIndexRepo) eachIndexFile(f func(info os.FileInfo) error) error {
 }
 
 func (l *FSIndexRepo) indexPath(key shard.Key) string {
-	return filepath.Join(l.baseDir, base58.Encode(key)+indexSuffix)
+	return filepath.Join(l.baseDir, key.String()+indexSuffix)
 }
 
 func (l *FSIndexRepo) versionPath() string {
 	return filepath.Join(l.baseDir, ".version")
 }
-
-var _ FullIndexRepo = (*FSIndexRepo)(nil)

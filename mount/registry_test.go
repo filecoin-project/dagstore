@@ -3,7 +3,6 @@ package mount
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/url"
 	"strconv"
@@ -18,22 +17,26 @@ var _ Mount = (*MockMount)(nil)
 type MockMount struct {
 	Val      string
 	URL      *url.URL
-	StatSize uint64
+	StatSize int64
 }
 
-func (m *MockMount) Fetch(_ context.Context) (io.ReadCloser, error) {
-	r := io.NopCloser(strings.NewReader(m.Val))
-	return r, nil
+func (m *MockMount) Close() error {
+	panic("implement me")
+}
+
+func (m *MockMount) Fetch(_ context.Context) (Reader, error) {
+	r := strings.NewReader(m.Val)
+	return &NopCloser{Reader: r, ReaderAt: r, Seeker: r}, nil
 }
 
 func (m *MockMount) Info() Info {
 	return Info{
-		Kind: MountKindRemote,
+		Kind: KindRemote,
 		URL:  m.URL,
 	}
 }
 
-func (m *MockMount) Stat() (Stat, error) {
+func (m *MockMount) Stat(_ context.Context) (Stat, error) {
 	return Stat{
 		Exists: true,
 		Size:   m.StatSize,
@@ -48,7 +51,7 @@ func (mf *MockMountFactory1) Parse(u *url.URL) (Mount, error) {
 		return nil, err
 	}
 
-	statSize, err := strconv.ParseUint(vals["size"][0], 10, 64)
+	statSize, err := strconv.ParseInt(vals["size"][0], 10, 64)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +71,7 @@ func (mf *MockMountFactory2) Parse(u *url.URL) (Mount, error) {
 		return nil, err
 	}
 
-	statSize, err := strconv.ParseUint(vals["size"][0], 10, 64)
+	statSize, err := strconv.ParseInt(vals["size"][0], 10, 64)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +89,7 @@ func TestRegistry(t *testing.T) {
 
 	// create a registry
 	r := Registry{
-		m: make(map[string]MountFactory),
+		m: make(map[string]Type),
 	}
 
 	// create & register mock mount factory 1
@@ -109,17 +112,17 @@ func TestRegistry(t *testing.T) {
 	m, err := r.Instantiate(url)
 	require.NoError(t, err)
 	require.Equal(t, url.Host, fetchAndReadAll(t, m))
-	stat, err := m.Stat()
+	stat, err := m.Stat(context.TODO())
 	require.NoError(t, err)
-	require.Equal(t, m1StatSize, stat.Size)
+	require.EqualValues(t, m1StatSize, stat.Size)
 
 	// instantiate mount 2 and verify state is constructed correctly
 	m, err = r.Instantiate(u2)
 	require.NoError(t, err)
 	require.Equal(t, u2.Host, fetchAndReadAll(t, m))
-	stat, err = m.Stat()
+	stat, err = m.Stat(context.TODO())
 	require.NoError(t, err)
-	require.Equal(t, m2StatSize*2, stat.Size)
+	require.EqualValues(t, m2StatSize*2, stat.Size)
 }
 
 func fetchAndReadAll(t *testing.T, m Mount) string {
