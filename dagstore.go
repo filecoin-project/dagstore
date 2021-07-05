@@ -40,7 +40,6 @@ type DAGStore struct {
 	shards  map[shard.Key]*Shard
 	config  Config
 	indices index.FullIndexRepo
-	// scratch *ScratchSpace
 
 	// externalCh receives external tasks.
 	externalCh chan *Task
@@ -128,11 +127,6 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	// TODO: recover persisted shard state from the Datastore.
-	// TODO: instantiate scratch space with persisted paths.
-	// scratch, err := NewScratchSpace(cfg.ScratchSpaceDir, map[shard.Key]string{}, strconv.Itoa(int(time.Now().Unix())))
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create scratch space: %w", err)
-	// }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dagst := &DAGStore{
@@ -145,7 +139,6 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		completionCh: make(chan *Task, 64),  // len=64, hitting this limit will just make async tasks wait.
 		ctx:          ctx,
 		cancelFn:     cancel,
-		// scratch: scratch,
 	}
 
 	dagst.wg.Add(1)
