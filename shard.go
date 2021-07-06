@@ -28,6 +28,7 @@ type Shard struct {
 	lk sync.RWMutex
 
 	// IMMUTABLE FIELDS: safe to read outside the event loop without a lock.
+	d     *DAGStore
 	key   shard.Key
 	mount *mount.Upgrader
 

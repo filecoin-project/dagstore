@@ -25,13 +25,8 @@ func (b *BytesMount) Fetch(_ context.Context) (Reader, error) {
 }
 
 func (b *BytesMount) Info() Info {
-	u := &url.URL{
-		Scheme: "bytes",
-		Host:   base64.StdEncoding.EncodeToString(b.Bytes),
-	}
 	return Info{
 		Kind:             KindLocal,
-		URL:              u,
 		AccessSequential: true,
 		AccessSeek:       true,
 		AccessRandom:     true,
@@ -43,6 +38,21 @@ func (b *BytesMount) Stat(_ context.Context) (Stat, error) {
 		Exists: true,
 		Size:   int64(len(b.Bytes)),
 	}, nil
+}
+
+func (b *BytesMount) Serialize() *url.URL {
+	return &url.URL{
+		Host: base64.StdEncoding.EncodeToString(b.Bytes),
+	}
+}
+
+func (b *BytesMount) Deserialize(u *url.URL) error {
+	decoded, err := base64.StdEncoding.DecodeString(u.Host)
+	if err != nil {
+		return err
+	}
+	b.Bytes = decoded
+	return nil
 }
 
 func (b *BytesMount) Close() error {

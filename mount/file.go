@@ -18,10 +18,8 @@ func (f *FileMount) Fetch(_ context.Context) (Reader, error) {
 }
 
 func (f *FileMount) Info() Info {
-	u, _ := url.Parse(fmt.Sprintf("file://%s", f.Path))
 	return Info{
 		Kind:             KindLocal,
-		URL:              u,
 		AccessRandom:     true,
 		AccessSeek:       true,
 		AccessSequential: true,
@@ -37,6 +35,20 @@ func (f *FileMount) Stat(_ context.Context) (Stat, error) {
 		Exists: !os.IsNotExist(err),
 		Size:   stat.Size(),
 	}, err
+}
+
+func (f *FileMount) Serialize() *url.URL {
+	return &url.URL{
+		Host: f.Path,
+	}
+}
+
+func (f *FileMount) Deserialize(u *url.URL) error {
+	if u.Host == "" {
+		return fmt.Errorf("invalid host")
+	}
+	f.Path = u.Host
+	return nil
 }
 
 func (f *FileMount) Close() error {

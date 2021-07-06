@@ -75,6 +75,13 @@ type Mount interface {
 
 	// Stat describes the underlying resource.
 	Stat(ctx context.Context) (Stat, error)
+
+	// Serialize returns a canonical URL that can be used to revive the Mount
+	// after a restart.
+	Serialize() *url.URL
+
+	// Deserialize configures this Mount from the specified URL.
+	Deserialize(*url.URL) error
 }
 
 // Reader is a fully-featured Reader returned from MountTypes. It is the
@@ -91,8 +98,6 @@ type Reader interface {
 type Info struct {
 	// Kind indicates the kind of mount.
 	Kind Kind
-	// URL is the canonical URL this Mount serializes to.
-	URL *url.URL
 
 	// TODO convert to bitfield
 	AccessSequential bool
@@ -110,9 +115,12 @@ type Stat struct {
 
 // Type represents a mount type, and allows instantiation of a Mount from its
 // URL serialized form.
-type Type interface {
-	// Parse initializes the mount from a URL.
-	Parse(u *url.URL) (Mount, error)
+type Type struct {
+	// Scheme is the URL scheme associated with a mount type.
+	Scheme string
+
+	// ParseFn initializes the mount from a URL.
+	ParseFn func(u *url.URL) (Mount, error)
 }
 
 type NopCloser struct {

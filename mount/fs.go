@@ -3,6 +3,7 @@ package mount
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 )
@@ -27,16 +28,8 @@ func (f *FSMount) Fetch(_ context.Context) (Reader, error) {
 }
 
 func (f *FSMount) Info() Info {
-	u := &url.URL{Scheme: "fs"}
-
-	if st, err := fs.Stat(f.FS, f.Path); err != nil {
-		u.Host = "irrecoverable"
-	} else {
-		u.Host = st.Name()
-	}
 	return Info{
 		Kind:             KindLocal,
-		URL:              u,
 		AccessSequential: true,
 		AccessSeek:       false,
 		AccessRandom:     false,
@@ -55,6 +48,24 @@ func (f *FSMount) Stat(_ context.Context) (Stat, error) {
 		Exists: true,
 		Size:   st.Size(),
 	}, nil
+}
+
+func (f *FSMount) Serialize() *url.URL {
+	u := new(url.URL)
+	if st, err := fs.Stat(f.FS, f.Path); err != nil {
+		u.Host = "irrecoverable"
+	} else {
+		u.Host = st.Name()
+	}
+	return u
+}
+
+func (f *FSMount) Deserialize(u *url.URL) error {
+	if u.Host == "irrecoverable" || u.Host == "" {
+		return fmt.Errorf("invalid host")
+	}
+	f.Path = u.Host
+	return nil
 }
 
 type fsReader struct {

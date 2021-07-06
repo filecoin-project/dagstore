@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sync"
 )
@@ -78,7 +79,6 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 func (u *Upgrader) Info() Info {
 	return Info{
 		Kind:             KindLocal,
-		URL:              u.underlying.Info().URL,
 		AccessSequential: true,
 		AccessSeek:       true,
 		AccessRandom:     true,
@@ -102,6 +102,14 @@ func (u *Upgrader) TransientPath() string {
 	defer u.lk.Unlock()
 
 	return u.transient
+}
+
+func (u *Upgrader) Serialize() *url.URL {
+	return u.underlying.Serialize()
+}
+
+func (u *Upgrader) Deserialize(url *url.URL) error {
+	return u.underlying.Deserialize(url)
 }
 
 func (u *Upgrader) Close() error {
