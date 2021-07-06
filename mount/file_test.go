@@ -17,6 +17,8 @@ func TestFileMount(t *testing.T) {
 	// create a temp file.
 	dir := t.TempDir()
 	f, err := ioutil.TempFile(dir, "")
+	require.NoError(t, err)
+	defer f.Close()
 
 	// read random junk into it up to 1kb; send a copy to a buffer
 	// so we can compare.
@@ -50,6 +52,7 @@ func TestFileMount(t *testing.T) {
 
 	// seek to the beginning and read the first byte.
 	n, err = reader.Seek(0, 0)
+	require.NoError(t, err)
 	var b1 [1]byte
 	i, err = reader.Read(b1[:])
 	require.NoError(t, err)
