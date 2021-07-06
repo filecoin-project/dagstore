@@ -13,10 +13,10 @@ import (
 type waiter struct {
 	// context governing the operation if this is an external op.
 	ctx   context.Context
-	outCh chan Result
+	outCh chan ShardResult
 }
 
-func (w waiter) deliver(res *Result) {
+func (w waiter) deliver(res *ShardResult) {
 	select {
 	case w.outCh <- *res:
 	case <-w.ctx.Done():

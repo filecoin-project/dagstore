@@ -56,7 +56,7 @@ type DAGStore struct {
 
 type dispatch struct {
 	w   *waiter
-	res *Result
+	res *ShardResult
 }
 
 // Task represents an operation to be performed on a shard or the DAG store.
@@ -67,8 +67,8 @@ type task struct {
 	err   error
 }
 
-// Result encapsulates a result from an asynchronous operation.
-type Result struct {
+// ShardResult encapsulates a result from an asynchronous operation.
+type ShardResult struct {
 	Key      shard.Key
 	Error    error
 	Accessor *ShardAccessor
@@ -167,7 +167,7 @@ type RegisterOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for registration. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.Mount, out chan Result, opts RegisterOpts) error {
+func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.Mount, out chan ShardResult, opts RegisterOpts) error {
 	d.lk.Lock()
 	if _, ok := d.shards[key]; ok {
 		d.lk.Unlock()
@@ -199,7 +199,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 type DestroyOpts struct {
 }
 
-func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan Result, _ DestroyOpts) error {
+func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan ShardResult, _ DestroyOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -225,7 +225,7 @@ type AcquireOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Result, _ AcquireOpts) error {
+func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
