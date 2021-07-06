@@ -72,9 +72,6 @@ type Result struct {
 	Key      shard.Key
 	Error    error
 	Accessor *ShardAccessor
-
-	// for internal use; sync operations.
-	respAllShardsInfo AllShardsInfo
 }
 
 type Config struct {
@@ -248,14 +245,20 @@ type ShardInfo struct {
 	Error error
 }
 
-func (d *DAGStore) AllShardsInfo() (AllShardsInfo, error) {
-	ch := make(chan Result, 1)
-	tsk := &task{op: OpAllShardsInfo, waiter: &waiter{ctx: d.ctx, outCh: ch}}
-	if err := d.queueTask(tsk, d.externalCh); err != nil {
-		return nil, err
+// AllShardsInfo returns the current state of all registered shards, as well as
+// any errors.
+func (d *DAGStore) AllShardsInfo() AllShardsInfo {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+
+	ret := make(AllShardsInfo, len(d.shards))
+	for k, s := range d.shards {
+		s.lk.RLock()
+		info := ShardInfo{ShardState: s.state, Error: s.err}
+		s.lk.RUnlock()
+		ret[k] = info
 	}
-	res := <-ch
-	return res.respAllShardsInfo, nil
+	return ret
 }
 
 func (d *DAGStore) Close() error {

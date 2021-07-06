@@ -14,7 +14,6 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
-	OpAllShardsInfo
 )
 
 func (o OpType) String() string {
@@ -24,8 +23,7 @@ func (o OpType) String() string {
 		"OpShardDestroy",
 		"OpShardAcquire",
 		"OpShardFail",
-		"OpShardRelease",
-		"OpAllShardsInfo"}[o]
+		"OpShardRelease"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -36,7 +34,10 @@ func (d *DAGStore) control() {
 	for ; err == nil; tsk, err = d.consumeNext() {
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
-		switch s := tsk.shard; tsk.op {
+		s := tsk.shard
+		s.lk.Lock()
+
+		switch tsk.op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
@@ -125,20 +126,10 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
-		case OpAllShardsInfo:
-			// TODO not sure I like taking the global lock; all this feels very hacky.
-			d.lk.RLock()
-			info := make(AllShardsInfo, len(d.shards))
-			for k, v := range d.shards {
-				info[k] = ShardInfo{
-					ShardState: v.state,
-					Error:      v.err,
-				}
-			}
-			d.lk.RUnlock()
-			res := &Result{respAllShardsInfo: info}
-			d.sendResult(res, tsk.waiter)
 		}
+
+		s.lk.Unlock()
+
 	}
 
 	if err != context.Canceled {

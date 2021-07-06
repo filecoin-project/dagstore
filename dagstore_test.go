@@ -65,6 +65,13 @@ func TestRegisterCarV1(t *testing.T) {
 	require.Contains(t, res.Error.Error(), "invalid car version")
 	require.EqualValues(t, k, res.Key)
 	require.Nil(t, res.Accessor)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 1)
+	for _, ss := range info {
+		require.Equal(t, ShardStateErrored, ss.ShardState)
+		require.Error(t, ss.Error)
+	}
 }
 
 func TestRegisterCarV2(t *testing.T) {
@@ -84,6 +91,13 @@ func TestRegisterCarV2(t *testing.T) {
 	require.NoError(t, res.Error)
 	require.EqualValues(t, k, res.Key)
 	require.Nil(t, res.Accessor)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 1)
+	for _, ss := range info {
+		require.Equal(t, ShardStateAvailable, ss.ShardState)
+		require.NoError(t, ss.Error)
+	}
 }
 
 func TestRegisterConcurrentShards(t *testing.T) {
@@ -109,7 +123,15 @@ func TestRegisterConcurrentShards(t *testing.T) {
 				return res.Error
 			})
 		}
+
 		require.NoError(t, grp.Wait())
+
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, n)
+		for _, ss := range info {
+			require.Equal(t, ShardStateAvailable, ss.ShardState)
+			require.NoError(t, ss.Error)
+		}
 	}
 
 	t.Run("16", func(t *testing.T) { run(t, 16) })
@@ -215,6 +237,13 @@ func TestConcurrentAcquires(t *testing.T) {
 			})
 		}
 		require.NoError(t, grp.Wait())
+
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, 1)
+		for _, ss := range info {
+			require.Equal(t, ShardStateServing, ss.ShardState)
+			require.NoError(t, ss.Error)
+		}
 	}
 
 	t.Run("1", func(t *testing.T) { run(t, 1) })

@@ -2,6 +2,7 @@ package dagstore
 
 import (
 	"context"
+	"sync"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
@@ -24,6 +25,8 @@ func (w waiter) deliver(res *Result) {
 
 // Shard encapsulates the state of a shard within the DAG store.
 type Shard struct {
+	lk sync.RWMutex
+
 	// IMMUTABLE FIELDS: safe to read outside the event loop without a lock.
 	key   shard.Key
 	mount *mount.Upgrader

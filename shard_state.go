@@ -21,9 +21,9 @@ const (
 
 	// ShardStateErrored indicates that an unexpected error was encountered
 	// during a shard operation, and therefore the shard needs to be recovered.
-	ShardStateErrored = 0xf0
+	ShardStateErrored ShardState = 0xf0
 
 	// ShardStateUnknown indicates that it's not possible to determine the state
 	// of the shard. This state is currently unused, but it's reserved.
-	ShardStateUnknown = 0xff
+	ShardStateUnknown ShardState = 0xff
 )
