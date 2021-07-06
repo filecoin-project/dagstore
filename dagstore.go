@@ -62,7 +62,6 @@ type dispatch struct {
 // Task represents an operation to be performed on a shard or the DAG store.
 type task struct {
 	*waiter
-
 	op    OpType
 	shard *Shard
 	err   error
@@ -237,6 +236,29 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 
 	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
+}
+
+type AllShardsInfo map[shard.Key]ShardInfo
+
+type ShardInfo struct {
+	ShardState
+	Error error
+}
+
+// AllShardsInfo returns the current state of all registered shards, as well as
+// any errors.
+func (d *DAGStore) AllShardsInfo() AllShardsInfo {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+
+	ret := make(AllShardsInfo, len(d.shards))
+	for k, s := range d.shards {
+		s.lk.RLock()
+		info := ShardInfo{ShardState: s.state, Error: s.err}
+		s.lk.RUnlock()
+		ret[k] = info
+	}
+	return ret
 }
 
 func (d *DAGStore) Close() error {

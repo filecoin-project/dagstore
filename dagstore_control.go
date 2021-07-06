@@ -34,7 +34,10 @@ func (d *DAGStore) control() {
 	for ; err == nil; tsk, err = d.consumeNext() {
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
-		switch s := tsk.shard; tsk.op {
+		s := tsk.shard
+		s.lk.Lock()
+
+		switch tsk.op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
@@ -122,7 +125,11 @@ func (d *DAGStore) control() {
 			delete(d.shards, s.key)
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
+
 		}
+
+		s.lk.Unlock()
+
 	}
 
 	if err != context.Canceled {
