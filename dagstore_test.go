@@ -75,7 +75,7 @@ func TestRegisterCarV1(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv1path}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv1path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -102,7 +102,7 @@ func TestRegisterCarV2(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -134,7 +134,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 			grp.Go(func() error {
 				ch := make(chan ShardResult, 1)
 				k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
-				err := dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
+				err := dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 				if err != nil {
 					return err
 				}
@@ -190,7 +190,7 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -229,7 +229,7 @@ func TestConcurrentAcquires(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
