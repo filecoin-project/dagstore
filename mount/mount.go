@@ -8,9 +8,13 @@ import (
 )
 
 var (
-	// ErrNotSeekable is returned when FetchSeek is called on a mount that is
+	// ErrSeekUnsupported is returned when Seek is called on a mount that is
 	// not seekable.
-	ErrNotSeekable = errors.New("mount not seekable")
+	ErrSeekUnsupported = errors.New("mount does not support seek")
+
+	// ErrRandomAccessUnsupported is returned when ReadAt is called on a mount
+	// that does not support random access.
+	ErrRandomAccessUnsupported = errors.New("mount does not support random access")
 )
 
 // Kind is an enum describing the source of a Mount.

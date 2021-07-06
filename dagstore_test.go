@@ -3,7 +3,7 @@ package dagstore
 import (
 	"bytes"
 	"context"
-	_ "embed"
+	"embed"
 	"fmt"
 	"testing"
 
@@ -19,10 +19,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	carv1path = "testdata/sample-v1.car"
+	carv2path = "testdata/sample-wrapped-v2.car"
+)
+
 var (
-	//go:embed testdata/sample-v1.car
+	//go:embed testdata/*
+	testdata embed.FS
+
 	carv1 []byte
-	//go:embed testdata/sample-wrapped-v2.car
 	carv2 []byte
 
 	// rootCID is the root CID of the carv2 for testing.
@@ -31,6 +37,17 @@ var (
 
 func init() {
 	_ = logging.SetLogLevel("dagstore", "DEBUG")
+
+	var err error
+	carv1, err = testdata.ReadFile(carv1path)
+	if err != nil {
+		panic(err)
+	}
+
+	carv2, err = testdata.ReadFile(carv2path)
+	if err != nil {
+		panic(err)
+	}
 
 	reader, err := car.NewReader(bytes.NewReader(carv2))
 	if err != nil {
@@ -56,9 +73,9 @@ func TestRegisterCarV1(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan Result, 1)
+	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv1}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv1path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -66,6 +83,13 @@ func TestRegisterCarV1(t *testing.T) {
 	require.Contains(t, res.Error.Error(), "invalid car version")
 	require.EqualValues(t, k, res.Key)
 	require.Nil(t, res.Accessor)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 1)
+	for _, ss := range info {
+		require.Equal(t, ShardStateErrored, ss.ShardState)
+		require.Error(t, ss.Error)
+	}
 }
 
 func TestRegisterCarV2(t *testing.T) {
@@ -76,15 +100,22 @@ func TestRegisterCarV2(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan Result, 1)
+	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
 	require.NoError(t, res.Error)
 	require.EqualValues(t, k, res.Key)
 	require.Nil(t, res.Accessor)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 1)
+	for _, ss := range info {
+		require.Equal(t, ShardStateAvailable, ss.ShardState)
+		require.NoError(t, ss.Error)
+	}
 }
 
 func TestRegisterConcurrentShards(t *testing.T) {
@@ -101,9 +132,9 @@ func TestRegisterConcurrentShards(t *testing.T) {
 		for i := 0; i < n; i++ {
 			i := i
 			grp.Go(func() error {
-				ch := make(chan Result, 1)
+				ch := make(chan ShardResult, 1)
 				k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
-				err := dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+				err := dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 				if err != nil {
 					return err
 				}
@@ -111,9 +142,21 @@ func TestRegisterConcurrentShards(t *testing.T) {
 				return res.Error
 			})
 		}
+
 		require.NoError(t, grp.Wait())
+
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, n)
+		for _, ss := range info {
+			require.Equal(t, ShardStateAvailable, ss.ShardState)
+			require.NoError(t, ss.Error)
+		}
 	}
 
+	t.Run("1", func(t *testing.T) { run(t, 1) })
+	t.Run("2", func(t *testing.T) { run(t, 2) })
+	t.Run("4", func(t *testing.T) { run(t, 4) })
+	t.Run("8", func(t *testing.T) { run(t, 8) })
 	t.Run("16", func(t *testing.T) { run(t, 16) })
 	t.Run("32", func(t *testing.T) { run(t, 32) })
 	t.Run("64", func(t *testing.T) { run(t, 64) })
@@ -129,7 +172,7 @@ func TestAcquireInexistentShard(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan Result, 1)
+	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 	require.Error(t, err)
@@ -145,9 +188,9 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan Result, 1)
+	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -184,9 +227,9 @@ func TestConcurrentAcquires(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ch := make(chan Result, 1)
+	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.BytesMount{Bytes: carv2}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FsMount{FS: testdata, Path: carv2path}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -196,7 +239,7 @@ func TestConcurrentAcquires(t *testing.T) {
 		grp, _ := errgroup.WithContext(context.Background())
 		for i := 0; i < n; i++ {
 			grp.Go(func() error {
-				ch := make(chan Result, 1)
+				ch := make(chan ShardResult, 1)
 				err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
 				if err != nil {
 					return err
@@ -217,11 +260,20 @@ func TestConcurrentAcquires(t *testing.T) {
 				return err
 			})
 		}
+
 		require.NoError(t, grp.Wait())
+
 		// res, err := store.Query(dsq.Query{})
 		// require.NoError(t, err)
 		// rest, err := res.Rest()
 		// require.NoError(t, err)
+
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, 1)
+		for _, ss := range info {
+			require.Equal(t, ShardStateServing, ss.ShardState)
+			require.NoError(t, ss.Error)
+		}
 	}
 
 	t.Run("1", func(t *testing.T) { run(t, 1) })

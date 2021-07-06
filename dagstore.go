@@ -58,7 +58,7 @@ type DAGStore struct {
 
 type dispatch struct {
 	w   *waiter
-	res *Result
+	res *ShardResult
 }
 
 // Task represents an operation to be performed on a shard or the DAG store.
@@ -69,14 +69,11 @@ type task struct {
 	err   error
 }
 
-// Result encapsulates a result from an asynchronous operation.
-type Result struct {
+// ShardResult encapsulates a result from an asynchronous operation.
+type ShardResult struct {
 	Key      shard.Key
 	Error    error
 	Accessor *ShardAccessor
-
-	// for internal use; sync operations.
-	respAllShardsInfo AllShardsInfo
 }
 
 type Config struct {
@@ -173,14 +170,14 @@ type RegisterOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for registration. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.Mount, out chan Result, opts RegisterOpts) error {
+func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.Mount, out chan ShardResult, opts RegisterOpts) error {
 	d.lk.Lock()
 	if _, ok := d.shards[key]; ok {
 		d.lk.Unlock()
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
-	upgraded, err := mount.Upgrade(mnt, opts.ExistingTransient, d.config.TransientsDir)
+	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -205,7 +202,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 type DestroyOpts struct {
 }
 
-func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan Result, _ DestroyOpts) error {
+func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan ShardResult, _ DestroyOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -231,7 +228,7 @@ type AcquireOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Result, _ AcquireOpts) error {
+func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -251,14 +248,20 @@ type ShardInfo struct {
 	Error error
 }
 
-func (d *DAGStore) AllShardsInfo() (AllShardsInfo, error) {
-	ch := make(chan Result, 1)
-	tsk := &task{op: OpAllShardsInfo, waiter: &waiter{ctx: d.ctx, outCh: ch}}
-	if err := d.queueTask(tsk, d.externalCh); err != nil {
-		return nil, err
+// AllShardsInfo returns the current state of all registered shards, as well as
+// any errors.
+func (d *DAGStore) AllShardsInfo() AllShardsInfo {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+
+	ret := make(AllShardsInfo, len(d.shards))
+	for k, s := range d.shards {
+		s.lk.RLock()
+		info := ShardInfo{ShardState: s.state, Error: s.err}
+		s.lk.RUnlock()
+		ret[k] = info
 	}
-	res := <-ch
-	return res.respAllShardsInfo, nil
+	return ret
 }
 
 func (d *DAGStore) Close() error {

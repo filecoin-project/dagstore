@@ -14,7 +14,6 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
-	OpAllShardsInfo
 )
 
 func (o OpType) String() string {
@@ -24,8 +23,7 @@ func (o OpType) String() string {
 		"OpShardDestroy",
 		"OpShardAcquire",
 		"OpShardFail",
-		"OpShardRelease",
-		"OpAllShardsInfo"}[o]
+		"OpShardRelease"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -37,6 +35,8 @@ func (d *DAGStore) control() {
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
 		s := tsk.shard
+		s.lk.Lock()
+
 		switch tsk.op {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
@@ -52,7 +52,7 @@ func (d *DAGStore) control() {
 
 		case OpShardMakeAvailable:
 			if s.wRegister != nil {
-				res := &Result{Key: s.key}
+				res := &ShardResult{Key: s.key}
 				d.sendResult(res, s.wRegister)
 				s.wRegister = nil
 			}
@@ -96,7 +96,7 @@ func (d *DAGStore) control() {
 
 			// can't block the event loop, so launch a goroutine to notify.
 			if s.wRegister != nil {
-				res := &Result{
+				res := &ShardResult{
 					Key:   s.key,
 					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
@@ -107,7 +107,7 @@ func (d *DAGStore) control() {
 			// can't block the event loop, so launch a goroutine per acquirer.
 			if len(s.wAcquire) > 0 {
 				err := fmt.Errorf("failed to acquire shard: %w", tsk.err)
-				res := &Result{Key: s.key, Error: err}
+				res := &ShardResult{Key: s.key, Error: err}
 				d.sendResult(res, s.wAcquire...)
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
@@ -117,7 +117,7 @@ func (d *DAGStore) control() {
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
-				res := &Result{Key: s.key, Error: err}
+				res := &ShardResult{Key: s.key, Error: err}
 				d.sendResult(res, tsk.waiter)
 				break
 			}
@@ -127,25 +127,14 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
-		case OpAllShardsInfo:
-			// TODO not sure I like taking the global lock; all this feels very hacky.
-			d.lk.RLock()
-			info := make(AllShardsInfo, len(d.shards))
-			for k, v := range d.shards {
-				info[k] = ShardInfo{
-					ShardState: v.state,
-					Error:      v.err,
-				}
-			}
-			d.lk.RUnlock()
-			res := &Result{respAllShardsInfo: info}
-			d.sendResult(res, tsk.waiter)
 		}
 
 		// persist the current shard state.
 		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 		}
+
+		s.lk.Unlock()
 	}
 
 	if err != context.Canceled {

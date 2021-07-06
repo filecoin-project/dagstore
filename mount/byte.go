@@ -7,6 +7,8 @@ import (
 	"net/url"
 )
 
+// BytesMount encloses a byte slice. It is mainly used for testing. The
+// Upgrader passes through it.
 type BytesMount struct {
 	Bytes []byte
 }

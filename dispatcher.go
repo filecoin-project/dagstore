@@ -15,7 +15,7 @@ func (d *DAGStore) dispatcher() {
 	}
 }
 
-func (d *DAGStore) sendResult(res *Result, waiters ...*waiter) {
+func (d *DAGStore) sendResult(res *ShardResult, waiters ...*waiter) {
 	for _, w := range waiters {
 		d.dispatchCh <- &dispatch{w: w, res: res}
 	}

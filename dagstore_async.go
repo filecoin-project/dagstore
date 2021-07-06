@@ -22,7 +22,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	if err != nil {
 		err = fmt.Errorf("failed to acquire reader of mount: %w", err)
 		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
-		d.sendResult(&Result{Key: k, Error: err}, w)
+		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
@@ -30,12 +30,12 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	if err != nil {
 		err = fmt.Errorf("failed to recover index for shard %s: %w", k, err)
 		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
-		d.sendResult(&Result{Key: k, Error: err}, w)
+		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
 	sa, err := NewShardAccessor(k, reader, idx)
-	d.sendResult(&Result{Key: k, Accessor: sa, Error: err}, w)
+	d.sendResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 
 // initializeAsync initializes a shard asynchronously by fetching its data and
