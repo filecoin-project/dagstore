@@ -122,6 +122,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch from underlying mount: %w", err)
 	}
+	defer from.Close()
 
 	_, err = io.Copy(file, from)
 	if err != nil {
