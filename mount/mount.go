@@ -113,16 +113,6 @@ type Stat struct {
 	Size int64
 }
 
-// Type represents a mount type, and allows instantiation of a Mount from its
-// URL serialized form.
-type Type struct {
-	// Scheme is the URL scheme associated with a mount type.
-	Scheme string
-
-	// ParseFn initializes the mount from a URL.
-	ParseFn func(u *url.URL) (Mount, error)
-}
-
 type NopCloser struct {
 	io.Reader
 	io.ReaderAt
