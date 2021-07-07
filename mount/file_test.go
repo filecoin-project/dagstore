@@ -35,10 +35,12 @@ func TestFileMount(t *testing.T) {
 	require.True(t, stat.Exists)
 	require.EqualValues(t, size, stat.Size)
 
+	// check URL.
+	require.Equal(t, mnt.Path, mnt.Serialize().Host)
+
 	info := mnt.Info()
 	require.True(t, info.AccessSequential && info.AccessSeek && info.AccessRandom) // all flags true
 	require.Equal(t, KindLocal, info.Kind)
-	require.Equal(t, "file://"+mnt.Path, info.URL.String())
 
 	reader, err := mnt.Fetch(context.Background())
 	require.NoError(t, err)
