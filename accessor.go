@@ -49,8 +49,8 @@ func (sa *ShardAccessor) Shard() shard.Key {
 }
 
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
-	bs := blockstore.ReadOnlyOf(sa.data.CarV1Reader(), sa.idx)
-	return bs, nil
+	bs, err := blockstore.NewReadOnly(sa.data.CarV1Reader(), sa.idx)
+	return bs, err
 }
 
 // Close terminates this shard accessor, releasing any resources associated
