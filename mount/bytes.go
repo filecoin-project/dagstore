@@ -7,13 +7,15 @@ import (
 	"net/url"
 )
 
+// BytesMount encloses a byte slice. It is mainly used for testing. The
+// Upgrader passes through it.
 type BytesMount struct {
 	Bytes []byte
 }
 
 var _ Mount = (*BytesMount)(nil)
 
-func (b *BytesMount) Fetch(ctx context.Context) (Reader, error) {
+func (b *BytesMount) Fetch(_ context.Context) (Reader, error) {
 	r := bytes.NewReader(b.Bytes)
 	return &NopCloser{
 		Reader:   r,
@@ -23,24 +25,34 @@ func (b *BytesMount) Fetch(ctx context.Context) (Reader, error) {
 }
 
 func (b *BytesMount) Info() Info {
-	u := &url.URL{
-		Scheme: "memory",
-		Host:   base64.StdEncoding.EncodeToString(b.Bytes),
-	}
 	return Info{
 		Kind:             KindLocal,
-		URL:              u,
 		AccessSequential: true,
 		AccessSeek:       true,
 		AccessRandom:     true,
 	}
 }
 
-func (b *BytesMount) Stat(ctx context.Context) (Stat, error) {
+func (b *BytesMount) Stat(_ context.Context) (Stat, error) {
 	return Stat{
 		Exists: true,
 		Size:   int64(len(b.Bytes)),
 	}, nil
+}
+
+func (b *BytesMount) Serialize() *url.URL {
+	return &url.URL{
+		Host: base64.StdEncoding.EncodeToString(b.Bytes),
+	}
+}
+
+func (b *BytesMount) Deserialize(u *url.URL) error {
+	decoded, err := base64.StdEncoding.DecodeString(u.Host)
+	if err != nil {
+		return err
+	}
+	b.Bytes = decoded
+	return nil
 }
 
 func (b *BytesMount) Close() error {

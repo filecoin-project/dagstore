@@ -10,6 +10,7 @@ require (
 	github.com/ipld/go-car/v2 v2.0.0-20210706083137-aa61149042cd
 	github.com/mr-tron/base58 v1.2.0
 	github.com/stretchr/testify v1.7.0
+	github.com/whyrusleeping/cbor-gen v0.0.0-20200123233031-1cdf64d27158
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
 )

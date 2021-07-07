@@ -8,9 +8,13 @@ import (
 )
 
 var (
-	// ErrNotSeekable is returned when FetchSeek is called on a mount that is
+	// ErrSeekUnsupported is returned when Seek is called on a mount that is
 	// not seekable.
-	ErrNotSeekable = errors.New("mount not seekable")
+	ErrSeekUnsupported = errors.New("mount does not support seek")
+
+	// ErrRandomAccessUnsupported is returned when ReadAt is called on a mount
+	// that does not support random access.
+	ErrRandomAccessUnsupported = errors.New("mount does not support random access")
 )
 
 // Kind is an enum describing the source of a Mount.
@@ -71,6 +75,13 @@ type Mount interface {
 
 	// Stat describes the underlying resource.
 	Stat(ctx context.Context) (Stat, error)
+
+	// Serialize returns a canonical URL that can be used to revive the Mount
+	// after a restart.
+	Serialize() *url.URL
+
+	// Deserialize configures this Mount from the specified URL.
+	Deserialize(*url.URL) error
 }
 
 // Reader is a fully-featured Reader returned from MountTypes. It is the
@@ -87,8 +98,6 @@ type Reader interface {
 type Info struct {
 	// Kind indicates the kind of mount.
 	Kind Kind
-	// URL is the canonical URL this Mount serializes to.
-	URL *url.URL
 
 	// TODO convert to bitfield
 	AccessSequential bool
@@ -102,13 +111,6 @@ type Stat struct {
 	Exists bool
 	// Size is the size of the asset referred to by this Mount.
 	Size int64
-}
-
-// Type represents a mount type, and allows instantiation of a Mount from its
-// URL serialized form.
-type Type interface {
-	// Parse initializes the mount from a URL.
-	Parse(u *url.URL) (Mount, error)
 }
 
 type NopCloser struct {

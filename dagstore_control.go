@@ -30,8 +30,16 @@ func (o OpType) String() string {
 func (d *DAGStore) control() {
 	defer d.wg.Done()
 
-	tsk, err := d.consumeNext()
-	for ; err == nil; tsk, err = d.consumeNext() {
+	var (
+		tsk *task
+		err error
+	)
+
+	for {
+		if tsk, err = d.consumeNext(); err != nil {
+			break
+		}
+
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
 		s := tsk.shard
@@ -76,6 +84,7 @@ func (d *DAGStore) control() {
 
 			s.state = ShardStateServing
 			s.refs++
+
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
@@ -128,8 +137,12 @@ func (d *DAGStore) control() {
 
 		}
 
-		s.lk.Unlock()
+		// persist the current shard state.
+		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
+			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		}
 
+		s.lk.Unlock()
 	}
 
 	if err != context.Canceled {
@@ -152,6 +165,6 @@ func (d *DAGStore) consumeNext() (tsk *task, error error) {
 	case tsk = <-d.completionCh:
 		return tsk, nil
 	case <-d.ctx.Done():
-		return // TODO drain and process before returning?
+		return nil, d.ctx.Err() // TODO drain and process before returning?
 	}
 }

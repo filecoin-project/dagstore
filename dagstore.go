@@ -11,7 +11,15 @@ import (
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/namespace"
+	"github.com/ipfs/go-datastore/query"
+	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
+)
+
+var (
+	// StoreNamespace is the namespace under which shard state will be persisted.
+	StoreNamespace = ds.NewKey("dagstore")
 )
 
 var log = logging.Logger("dagstore")
@@ -39,6 +47,7 @@ type DAGStore struct {
 	shards  map[shard.Key]*Shard
 	config  Config
 	indices index.FullIndexRepo
+	store   ds.Datastore
 
 	// externalCh receives external tasks.
 	externalCh chan *task
@@ -75,9 +84,9 @@ type ShardResult struct {
 }
 
 type Config struct {
-	// ScrapRoot is the path to the scratch space, where local copies of
-	// remote mounts are saved.
-	ScratchSpaceDir string
+	// TransientsDir is the path to directory where local transient files will
+	// be created for remote mounts.
+	TransientsDir string
 
 	// IndexDir is the path where indices are stored.
 	IndexDir string
@@ -85,18 +94,17 @@ type Config struct {
 	// Datastore is the datastore where shard state will be persisted.
 	Datastore ds.Datastore
 
-	// MountTypes are the recognized mount types, bound to their corresponding
-	// URL schemes.
-	MountTypes map[string]mount.Type
+	// MountRegistry contains the set of recognized mount types.
+	MountRegistry *mount.Registry
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
 func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// validate and manage scratch root directory.
-	if cfg.ScratchSpaceDir == "" {
+	if cfg.TransientsDir == "" {
 		return nil, fmt.Errorf("missing scratch area root path")
 	}
-	if err := ensureDir(cfg.ScratchSpaceDir); err != nil {
+	if err := ensureDir(cfg.TransientsDir); err != nil {
 		return nil, fmt.Errorf("failed to create scratch root dir: %w", err)
 	}
 
@@ -119,31 +127,47 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// handle the datastore.
 	if cfg.Datastore == nil {
 		log.Warnf("no datastore provided; falling back to in-mem datastore; shard state will not survive restarts")
-		cfg.Datastore = ds.NewMapDatastore()
+		cfg.Datastore = dssync.MutexWrap(ds.NewMapDatastore()) // TODO can probably remove mutex wrap, since access is single-threaded
 	}
 
-	// create the registry and register all mount types.
-	mounts := mount.NewRegistry()
-	for scheme, typ := range cfg.MountTypes {
-		if err := mounts.Register(scheme, typ); err != nil {
-			return nil, fmt.Errorf("failed to register mount factory: %w", err)
-		}
-	}
+	// namespace all store operations.
+	cfg.Datastore = namespace.Wrap(cfg.Datastore, StoreNamespace)
 
-	// TODO: recover persisted shard state from the Datastore.
+	if cfg.MountRegistry == nil {
+		cfg.MountRegistry = mount.NewRegistry()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dagst := &DAGStore{
-		mounts:       mounts,
+		mounts:       cfg.MountRegistry,
 		config:       cfg,
 		indices:      indices,
 		shards:       make(map[shard.Key]*Shard),
+		store:        cfg.Datastore,
 		externalCh:   make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
 		internalCh:   make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
 		completionCh: make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
 		dispatchCh:   make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
 		ctx:          ctx,
 		cancelFn:     cancel,
+	}
+
+	if err := dagst.restoreState(); err != nil {
+		// TODO add a lenient mode.
+		return nil, fmt.Errorf("failed to restore dagstore state: %w", err)
+	}
+
+	// reset in-progress states.
+	for _, s := range dagst.shards {
+		if s.state == ShardStateServing {
+			// no active acquirers at start.
+			s.state = ShardStateAvailable
+		}
+		if s.state == ShardStateInitializing {
+			// restart the registration.
+			s.state = ShardStateNew
+			_ = dagst.queueTask(&task{op: OpShardRegister, shard: s}, dagst.externalCh)
+		}
 	}
 
 	dagst.wg.Add(1)
@@ -157,7 +181,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 type RegisterOpts struct {
 	// ExistingTransient can be supplied when registering a shard to indicate that
-	// there's already an existing local transient local that can be used for
+	// there's already an existing local transient copy that can be used for
 	// indexing.
 	ExistingTransient string
 }
@@ -174,7 +198,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
-	upgraded, err := mount.Upgrade(mnt, opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -184,6 +208,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 
 	// add the shard to the shard catalogue, and drop the lock.
 	s := &Shard{
+		d:         d,
 		key:       key,
 		state:     ShardStateNew,
 		mount:     upgraded,
@@ -264,6 +289,7 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 func (d *DAGStore) Close() error {
 	d.cancelFn()
 	d.wg.Wait()
+	_ = d.store.Sync(ds.Key{})
 	return nil
 }
 
@@ -273,6 +299,25 @@ func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
 		return fmt.Errorf("dag store closed")
 	case ch <- tsk:
 		return nil
+	}
+}
+
+func (d *DAGStore) restoreState() error {
+	results, err := d.store.Query(query.Query{})
+	if err != nil {
+		return fmt.Errorf("failed to recover dagstore state from store: %w", err)
+	}
+	for {
+		res, ok := results.NextSync()
+		if !ok {
+			return nil
+		}
+		s := &Shard{d: d}
+		if err := s.UnmarshalJSON(res.Value); err != nil {
+			log.Warnf("failed to recover state of shard %s: %s; skipping", shard.KeyFromString(res.Key), err)
+			continue
+		}
+		d.shards[s.key] = s
 	}
 }
 
