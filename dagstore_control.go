@@ -89,12 +89,16 @@ func (d *DAGStore) control() {
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
-				log.Warnf("ignored illegal request to release shard")
+				log.Warn("ignored illegal request to release shard")
 				break
 			}
 			s.refs--
 
+			// TODO Smarter transient management and GC in the future.
 			if s.refs == 0 {
+				if err := s.mount.DeleteTransient(); err != nil {
+					log.Errorf("failed to delete transient file for shard: %s", err)
+				}
 				s.state = ShardStateAvailable
 			}
 

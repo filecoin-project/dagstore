@@ -8,7 +8,6 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/blockstore"
 	"github.com/ipld/go-car/v2/index"
 )
@@ -26,21 +25,18 @@ type ReadBlockstore interface {
 // ShardAccessor provides various means to access the data contained
 // in a shard.
 type ShardAccessor struct {
-	key  shard.Key
-	data *car.Reader
-	idx  index.Index
+	key   shard.Key
+	data  mount.Reader
+	idx   index.Index
+	shard *Shard
 }
 
-func NewShardAccessor(key shard.Key, data mount.Reader, idx index.Index) (*ShardAccessor, error) {
-	reader, err := car.NewReader(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine car version when opening shard accessor: %w", err)
-	}
-
+func NewShardAccessor(key shard.Key, data mount.Reader, idx index.Index, s *Shard) (*ShardAccessor, error) {
 	return &ShardAccessor{
-		key:  key,
-		data: reader,
-		idx:  idx,
+		key:   key,
+		data:  data,
+		idx:   idx,
+		shard: s,
 	}, nil
 }
 
@@ -49,12 +45,16 @@ func (sa *ShardAccessor) Shard() shard.Key {
 }
 
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
-	bs, err := blockstore.NewReadOnly(sa.data.CarV1Reader(), sa.idx)
+	bs, err := blockstore.NewReadOnly(sa.data, sa.idx)
 	return bs, err
 }
 
 // Close terminates this shard accessor, releasing any resources associated
 // with it, and decrementing internal refcounts.
 func (sa *ShardAccessor) Close() error {
-	return sa.data.Close()
+	if err := sa.data.Close(); err != nil {
+		return fmt.Errorf("failed to close shard: %w", err)
+	}
+	tsk := &task{op: OpShardRelease, shard: sa.shard}
+	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
 }

@@ -34,9 +34,8 @@ type Shard struct {
 
 	// MUTABLE FIELDS
 	// cannot read/write outside event loop.
-	state   ShardState // persisted in PersistedShard.State
-	err     error      // populated if shard state is errored; persisted in PersistedShard.Error
-	indexed bool       // persisted in PersistedShard.Indexed
+	state ShardState // persisted in PersistedShard.State
+	err   error      // populated if shard state is errored; persisted in PersistedShard.Error
 
 	wRegister *waiter
 	wAcquire  []*waiter

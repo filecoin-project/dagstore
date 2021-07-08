@@ -163,10 +163,16 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 			// no active acquirers at start.
 			s.state = ShardStateAvailable
 		}
+
 		if s.state == ShardStateInitializing {
-			// restart the registration.
-			s.state = ShardStateNew
-			_ = dagst.queueTask(&task{op: OpShardRegister, shard: s}, dagst.externalCh)
+			// if we already have the index for the shard, there's nothing to do.
+			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				s.state = ShardStateAvailable
+			} else {
+				// restart the registration.
+				s.state = ShardStateNew
+				_ = dagst.queueTask(&task{op: OpShardRegister, shard: s}, dagst.externalCh)
+			}
 		}
 	}
 

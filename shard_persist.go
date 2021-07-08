@@ -16,7 +16,6 @@ type PersistedShard struct {
 	Key           string     `json:"k"`
 	URL           string     `json:"u"`
 	State         ShardState `json:"s"`
-	Indexed       bool       `json:"i"`
 	TransientPath string     `json:"t"`
 	Error         string     `json:"e"`
 }
@@ -33,7 +32,6 @@ func (s *Shard) MarshalJSON() ([]byte, error) {
 		Key:           s.key.String(),
 		URL:           u.String(),
 		State:         s.state,
-		Indexed:       s.indexed,
 		TransientPath: s.mount.TransientPath(),
 	}
 	if s.err != nil {
@@ -76,7 +74,6 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("failed to apply mount upgrader: %w", err)
 	}
 
-	s.indexed = ps.Indexed
 	return nil
 }
 

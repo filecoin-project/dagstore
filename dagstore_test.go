@@ -67,10 +67,11 @@ func init() {
 }
 
 func TestRegisterCarV1(t *testing.T) {
+	ds := datastore.NewMapDatastore()
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     datastore.NewMapDatastore(),
+		Datastore:     ds,
 	})
 	require.NoError(t, err)
 
@@ -80,17 +81,21 @@ func TestRegisterCarV1(t *testing.T) {
 	require.NoError(t, err)
 
 	res := <-ch
-	require.Error(t, res.Error)
-	require.Contains(t, res.Error.Error(), "invalid car version")
+	require.NoError(t, res.Error)
 	require.EqualValues(t, k, res.Key)
 	require.Nil(t, res.Accessor)
 
 	info := dagst.AllShardsInfo()
 	require.Len(t, info, 1)
 	for _, ss := range info {
-		require.Equal(t, ShardStateErrored, ss.ShardState)
-		require.Error(t, ss.Error)
+		require.Equal(t, ShardStateAvailable, ss.ShardState)
+		require.NoError(t, ss.Error)
 	}
+
+	// verify index has been persisted
+	istat, err := dagst.indices.StatFullIndex(k)
+	require.NoError(t, err)
+	require.True(t, istat.Exists)
 }
 
 func TestRegisterCarV2(t *testing.T) {
@@ -117,6 +122,9 @@ func TestRegisterCarV2(t *testing.T) {
 		require.Equal(t, ShardStateAvailable, ss.ShardState)
 		require.NoError(t, ss.Error)
 	}
+	istat, err := dagst.indices.StatFullIndex(k)
+	require.NoError(t, err)
+	require.True(t, istat.Exists)
 }
 
 func TestRegisterConcurrentShards(t *testing.T) {
@@ -300,10 +308,14 @@ func registerShards(t *testing.T, dagst *DAGStore, n int) (ret []shard.Key) {
 
 	info := dagst.AllShardsInfo()
 	require.Len(t, info, n)
-	for _, ss := range info {
+	for k, ss := range info {
 		require.Equal(t, ShardStateAvailable, ss.ShardState)
 		require.NoError(t, ss.Error)
+		istat, err := dagst.indices.StatFullIndex(k)
+		require.NoError(t, err)
+		require.True(t, istat.Exists)
 	}
+
 	return ret
 }
 
