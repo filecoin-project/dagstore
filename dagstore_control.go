@@ -55,7 +55,12 @@ func (d *DAGStore) control() {
 			}
 
 			s.state = ShardStateInitializing
-
+			// if we already have the index for this shard, there's nothing to do here.
+			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
+				break
+			}
+			// otherwise, generate and persist an Index for the CAR payload of the given Shard.
 			go d.initializeAsync(tsk.ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
@@ -94,11 +99,7 @@ func (d *DAGStore) control() {
 			}
 			s.refs--
 
-			// TODO Smarter transient management and GC in the future.
 			if s.refs == 0 {
-				if err := s.mount.DeleteTransient(); err != nil {
-					log.Errorf("failed to delete transient file for shard: %s", err)
-				}
 				s.state = ShardStateAvailable
 			}
 

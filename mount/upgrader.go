@@ -20,6 +20,7 @@ type Upgrader struct {
 	passthrough bool
 
 	lk        sync.Mutex
+	refs      uint32
 	transient string
 	rootdir   string
 }
@@ -64,7 +65,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 
 	if u.transient != "" {
 		if _, err := os.Stat(u.transient); err == nil {
-			return os.Open(u.transient)
+			return u.toTransientReaderCloserUnlocked(u.transient)
 		}
 	}
 
@@ -73,7 +74,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		return nil, err
 	}
 
-	return os.Open(u.transient)
+	return u.toTransientReaderCloserUnlocked(u.transient)
 }
 
 func (u *Upgrader) Info() Info {
@@ -150,22 +151,45 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	return nil
 }
 
-// DeleteTransient deletes the transient associated with this Upgrader, if
-// one exists. It is the caller's responsibility to ensure the transient is
-// not in use.
-func (u *Upgrader) DeleteTransient() error {
-	u.lk.Lock()
-	defer u.lk.Unlock()
-
-	if u.transient == "" {
-		return nil // nothing to do.
-	}
-
-	err := os.Remove(u.transient)
+func (u *Upgrader) toTransientReaderCloserUnlocked(path string) (*transientReaderCloser, error) {
+	f, err := os.Open(path)
 	if err != nil {
+		return nil, err
+	}
+	u.refs++
+
+	return &transientReaderCloser{
+		Reader: f,
+		u:      u,
+		path:   path,
+	}, nil
+}
+
+type transientReaderCloser struct {
+	path string
+	Reader
+	u *Upgrader
+}
+
+func (m *transientReaderCloser) Close() error {
+	m.u.lk.Lock()
+	defer m.u.lk.Unlock()
+
+	m.u.refs--
+	if err := m.Reader.Close(); err != nil {
 		return err
 	}
 
-	u.transient = ""
+	// TODO Smarter transient management and GC in the future.
+	if m.u.refs == 0 {
+		err := os.Remove(m.path)
+		if err != nil {
+			return err
+		}
+
+		m.u.transient = ""
+		return nil
+	}
+
 	return nil
 }
