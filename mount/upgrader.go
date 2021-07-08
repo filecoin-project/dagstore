@@ -65,7 +65,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 
 	if u.transient != "" {
 		if _, err := os.Stat(u.transient); err == nil {
-			return u.toTransientReaderCloserUnlocked(u.transient)
+			return u.toTransientReaderCloserUnlocked()
 		}
 	}
 
@@ -74,7 +74,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		return nil, err
 	}
 
-	return u.toTransientReaderCloserUnlocked(u.transient)
+	return u.toTransientReaderCloserUnlocked()
 }
 
 func (u *Upgrader) Info() Info {
@@ -151,8 +151,8 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	return nil
 }
 
-func (u *Upgrader) toTransientReaderCloserUnlocked(path string) (*transientReaderCloser, error) {
-	f, err := os.Open(path)
+func (u *Upgrader) toTransientReaderCloserUnlocked() (*transientReaderCloser, error) {
+	f, err := os.Open(u.transient)
 	if err != nil {
 		return nil, err
 	}
@@ -161,12 +161,10 @@ func (u *Upgrader) toTransientReaderCloserUnlocked(path string) (*transientReade
 	return &transientReaderCloser{
 		Reader: f,
 		u:      u,
-		path:   path,
 	}, nil
 }
 
 type transientReaderCloser struct {
-	path string
 	Reader
 	u *Upgrader
 }
@@ -182,7 +180,7 @@ func (m *transientReaderCloser) Close() error {
 
 	// TODO Smarter transient management and GC in the future.
 	if m.u.refs == 0 {
-		err := os.Remove(m.path)
+		err := os.Remove(m.u.transient)
 		if err != nil {
 			return err
 		}
