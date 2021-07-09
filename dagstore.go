@@ -159,11 +159,6 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	// reset in-progress states.
 	for _, s := range dagst.shards {
-		if s.state == ShardStateServing {
-			// no active acquirers at start.
-			s.state = ShardStateAvailable
-		}
-
 		if s.state == ShardStateInitializing {
 			// if we already have the index for the shard, there's nothing to do.
 			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
@@ -171,7 +166,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 			} else {
 				// restart the registration.
 				s.state = ShardStateNew
-				_ = dagst.queueTask(&task{op: OpShardRegister, shard: s}, dagst.externalCh)
+				_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
 			}
 		}
 	}
@@ -204,7 +199,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
-	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key, opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -268,12 +263,36 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
 }
+func (d *DAGStore) flush(ctx context.Context, key shard.Key, out chan ShardResult) error {
+	d.lk.Lock()
+	s, ok := d.shards[key]
+	if !ok {
+		d.lk.Unlock()
+		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
+	}
+	d.lk.Unlock()
+
+	tsk := &task{op: opFlush, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	return d.queueTask(tsk, d.externalCh)
+}
 
 type AllShardsInfo map[shard.Key]ShardInfo
 
 type ShardInfo struct {
 	ShardState
 	Error error
+	refs  uint32
+}
+
+// GetShardInfo returns the current state of the registered shard with key k
+func (d *DAGStore) GetShardInfo(k shard.Key) ShardInfo {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+	s := d.shards[k]
+	s.lk.RLock()
+	info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
+	s.lk.RUnlock()
+	return info
 }
 
 // AllShardsInfo returns the current state of all registered shards, as well as
@@ -285,7 +304,7 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 	ret := make(AllShardsInfo, len(d.shards))
 	for k, s := range d.shards {
 		s.lk.RLock()
-		info := ShardInfo{ShardState: s.state, Error: s.err}
+		info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
 		s.lk.RUnlock()
 		ret[k] = info
 	}

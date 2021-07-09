@@ -15,10 +15,6 @@ const (
 	// active for serving queries. There are no active shard readers.
 	ShardStateAvailable
 
-	// ShardStateServing indicates the shard has active readers and thus is
-	// currently actively serving requests.
-	ShardStateServing
-
 	// ShardStateErrored indicates that an unexpected error was encountered
 	// during a shard operation, and therefore the shard needs to be recovered.
 	ShardStateErrored ShardState = 0xf0

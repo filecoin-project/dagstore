@@ -19,7 +19,13 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	k := s.key
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
-		_ = d.failShard(s, fmt.Errorf("failed to acquire reader of mount: %w", err), d.completionCh)
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// fail the shard
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: fmt.Errorf("failed to acquire reader of mount: %w", err)}, d.completionCh)
+
+		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
@@ -29,12 +35,21 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
 		}
-		_ = d.failShard(s, fmt.Errorf("failed to recover index for shard %s: %w", k, err), d.completionCh)
+
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// fail the shard
+		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: fmt.Errorf("failed to recover index for shard %s: %w", k, err)}, d.completionCh)
+
+		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
-	sa, err := NewShardAccessor(k, reader, idx, s)
+	sa, err := NewShardAccessor(reader, idx, s)
+
+	// send the shard accessor to the caller.
 	d.sendResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 

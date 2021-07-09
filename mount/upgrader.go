@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
+
+	"github.com/filecoin-project/dagstore/shard"
 )
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
@@ -18,11 +21,11 @@ import (
 type Upgrader struct {
 	underlying  Mount
 	passthrough bool
+	shardKey    shard.Key
 
-	lk        sync.Mutex
-	refs      uint32
-	transient string
-	rootdir   string
+	lk      sync.Mutex
+	refs    uint32
+	rootdir string
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -30,8 +33,8 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, rootdir, initial string) (*Upgrader, error) {
-	ret := &Upgrader{underlying: underlying, rootdir: rootdir}
+func Upgrade(underlying Mount, rootdir string, shardKey shard.Key, initial string) (u *Upgrader, finalErr error) {
+	ret := &Upgrader{underlying: underlying, rootdir: rootdir, shardKey: shardKey}
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
@@ -44,11 +47,32 @@ func Upgrade(underlying Mount, rootdir, initial string) (*Upgrader, error) {
 		return ret, nil
 	}
 
-	if initial != "" {
-		if _, err := os.Stat(initial); err == nil {
-			ret.transient = initial
-			return ret, nil
-		}
+	if _, err := os.Stat(ret.transientFilePath()); err == nil {
+		return ret, nil
+	}
+	// clean up the existing transient if it's gone bad
+	_ = os.Remove(ret.transientFilePath())
+
+	if initial == "" {
+		return ret, nil
+	}
+	// we don't want to rename the file given by the client -> simply copy it and use the upgrader's file naming scheme here.
+	src, err := os.Open(initial)
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(ret.transientFilePath())
+	if err != nil {
+		return nil, err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(dst.Name())
+		return nil, err
 	}
 
 	return ret, nil
@@ -63,10 +87,8 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
-	if u.transient != "" {
-		if _, err := os.Stat(u.transient); err == nil {
-			return u.toTransientReaderCloserUnlocked()
-		}
+	if _, err := os.Stat(u.transientFilePath()); err == nil {
+		return u.toTransientReaderCloserUnlocked()
 	}
 
 	// transient appears to be dead, refetch.
@@ -87,22 +109,13 @@ func (u *Upgrader) Info() Info {
 }
 
 func (u *Upgrader) Stat(ctx context.Context) (Stat, error) {
-	if u.transient != "" {
-		if stat, err := os.Stat(u.transient); err == nil {
-			ret := Stat{Exists: true, Size: stat.Size()}
-			return ret, nil
-		}
+
+	if stat, err := os.Stat(u.transientFilePath()); err == nil {
+		ret := Stat{Exists: true, Size: stat.Size()}
+		return ret, nil
 	}
+
 	return u.underlying.Stat(ctx)
-}
-
-// TransientPath returns the local path of the transient file. If the Upgrader
-// is passthrough, the return value will be "".
-func (u *Upgrader) TransientPath() string {
-	u.lk.Lock()
-	defer u.lk.Unlock()
-
-	return u.transient
 }
 
 func (u *Upgrader) Serialize() *url.URL {
@@ -118,16 +131,13 @@ func (u *Upgrader) Close() error {
 }
 
 func (u *Upgrader) refetch(ctx context.Context) error {
-	if u.transient != "" {
-		_ = os.Remove(u.transient)
-	}
-	file, err := os.CreateTemp(u.rootdir, "transient")
+	_ = os.Remove(u.transientFilePath())
+
+	file, err := os.Create(u.transientFilePath())
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file: %w", err)
 	}
 	defer file.Close()
-
-	u.transient = file.Name()
 
 	// sanity check on underlying mount.
 	if stat, err := u.underlying.Stat(ctx); err != nil {
@@ -152,7 +162,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 }
 
 func (u *Upgrader) toTransientReaderCloserUnlocked() (*transientReaderCloser, error) {
-	f, err := os.Open(u.transient)
+	f, err := os.Open(u.transientFilePath())
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +172,10 @@ func (u *Upgrader) toTransientReaderCloserUnlocked() (*transientReaderCloser, er
 		Reader: f,
 		u:      u,
 	}, nil
+}
+
+func (u *Upgrader) transientFilePath() string {
+	return filepath.Join(u.rootdir, u.shardKey.String())
 }
 
 type transientReaderCloser struct {
@@ -180,12 +194,11 @@ func (m *transientReaderCloser) Close() error {
 
 	// TODO Smarter transient management and GC in the future.
 	if m.u.refs == 0 {
-		err := os.Remove(m.u.transient)
+		err := os.Remove(m.u.transientFilePath())
 		if err != nil {
 			return err
 		}
 
-		m.u.transient = ""
 		return nil
 	}
 

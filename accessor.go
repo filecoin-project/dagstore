@@ -2,7 +2,6 @@ package dagstore
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
@@ -25,15 +24,13 @@ type ReadBlockstore interface {
 // ShardAccessor provides various means to access the data contained
 // in a shard.
 type ShardAccessor struct {
-	key   shard.Key
 	data  mount.Reader
 	idx   index.Index
 	shard *Shard
 }
 
-func NewShardAccessor(key shard.Key, data mount.Reader, idx index.Index, s *Shard) (*ShardAccessor, error) {
+func NewShardAccessor(data mount.Reader, idx index.Index, s *Shard) (*ShardAccessor, error) {
 	return &ShardAccessor{
-		key:   key,
 		data:  data,
 		idx:   idx,
 		shard: s,
@@ -41,7 +38,7 @@ func NewShardAccessor(key shard.Key, data mount.Reader, idx index.Index, s *Shar
 }
 
 func (sa *ShardAccessor) Shard() shard.Key {
-	return sa.key
+	return sa.shard.key
 }
 
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
@@ -53,8 +50,9 @@ func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 // with it, and decrementing internal refcounts.
 func (sa *ShardAccessor) Close() error {
 	if err := sa.data.Close(); err != nil {
-		return fmt.Errorf("failed to close shard: %w", err)
+		log.Errorf("failed to close shard: %s", err)
 	}
+
 	tsk := &task{op: OpShardRelease, shard: sa.shard}
 	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
 }
