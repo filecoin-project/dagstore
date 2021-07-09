@@ -71,6 +71,30 @@ func init() {
 	rootCID = roots[0]
 }
 
+func TestRegisterUsingExistingTransient(t *testing.T) {
+	ds := datastore.NewMapDatastore()
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: t.TempDir(),
+		Datastore:     ds,
+	})
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult, 1)
+	k := shard.KeyFromString("foo")
+	// even though the fs mount has an empty path, the existing transient will get us through registration.
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: ""}, ch, RegisterOpts{ExistingTransient: carv2path})
+	require.NoError(t, err)
+
+	res := <-ch
+	require.NoError(t, res.Error)
+	require.EqualValues(t, k, res.Key)
+	require.Nil(t, res.Accessor)
+	idx, err := dagst.indices.GetFullIndex(k)
+	require.NoError(t, err)
+	require.NotNil(t, idx)
+}
+
 func TestRegisterCarV1(t *testing.T) {
 	ds := datastore.NewMapDatastore()
 	dagst, err := NewDAGStore(Config{
