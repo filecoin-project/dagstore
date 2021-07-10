@@ -3,107 +3,56 @@ package mount
 import (
 	"bytes"
 	"context"
-	"embed"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
-	"github.com/filecoin-project/dagstore/shard"
+	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
-//go:embed testdata/*
-var testdata embed.FS
-
-const (
-	carv1path = "testdata/sample-v1.car"
-	carv2path = "testdata/sample-wrapped-v2.car"
-)
-
 func TestUpgrade(t *testing.T) {
 	tcs := map[string]struct {
-		setup     func(t *testing.T, key shard.Key, rootDir string)
-		createMnt func(t *testing.T, key shard.Key, rootDir string) Mount
+		setup     func(t *testing.T, key string, rootDir string)
+		createMnt func(t *testing.T, key string, rootDir string) Mount
 		initial   string
 
 		// expectations
-		verify                  func(t *testing.T, u *Upgrader, key shard.Key, rootDir string)
+		verify                  func(t *testing.T, u *Upgrader, key string, rootDir string)
 		expectedContentFilePath string
 	}{
 		"no transient file when underlying mount has all capabilities": {
-			createMnt: func(t *testing.T, key shard.Key, rootDir string) Mount {
-				return &FileMount{carv1path}
+			createMnt: func(t *testing.T, key string, rootDir string) Mount {
+				return &FileMount{"../" + testdata.RootPathCarV1}
 			},
-			verify: func(t *testing.T, u *Upgrader, key shard.Key, rootDir string) {
+			verify: func(t *testing.T, u *Upgrader, key string, rootDir string) {
 				fs, err := ioutil.ReadDir(rootDir)
 				require.NoError(t, err)
 				require.Empty(t, fs)
-				_, err = os.Stat(u.transientFilePath())
+				_, err = os.Stat(u.TransientPath())
 				require.Error(t, err)
 			},
-			expectedContentFilePath: carv1path,
-		},
-		"no transient file is created when transient file already exists": {
-			setup: func(t *testing.T, key shard.Key, rootDir string) {
-				f, err := os.Create(filepath.Join(rootDir, key.String()))
-				require.NoError(t, err)
-
-				f2, err := os.Open(carv1path)
-				require.NoError(t, err)
-				_, err = io.Copy(f, f2)
-				require.NoError(t, err)
-				require.NoError(t, f2.Close())
-
-				require.NoError(t, f.Close())
-			},
-			initial: "should never be used",
-
-			createMnt: func(t *testing.T, key shard.Key, rootDir string) Mount {
-				return &FSMount{testdata, carv2path}
-			},
-
-			verify: func(t *testing.T, u *Upgrader, key shard.Key, rootDir string) {
-				_, err := os.Stat(u.transientFilePath())
-				require.NoError(t, err)
-			},
-			expectedContentFilePath: carv1path,
-		},
-
-		"no transient file is created if there is no initial copy given by the client": {
-			createMnt: func(t *testing.T, key shard.Key, rootDir string) Mount {
-				return &FSMount{testdata, carv2path}
-			},
-
-			verify: func(t *testing.T, u *Upgrader, key shard.Key, rootDir string) {
-				fs, err := ioutil.ReadDir(rootDir)
-				require.NoError(t, err)
-				require.Empty(t, fs)
-				_, err = os.Stat(u.transientFilePath())
-				require.Error(t, err)
-			},
-			expectedContentFilePath: carv2path,
+			expectedContentFilePath: "../" + testdata.RootPathCarV1,
 		},
 
 		"transient file is copied from user's initial file": {
-			initial: carv1path,
+			initial: "../" + testdata.RootPathCarV1,
 
-			createMnt: func(t *testing.T, key shard.Key, rootDir string) Mount {
-				return &FSMount{testdata, carv2path} // purposely giving a different file here.
+			createMnt: func(t *testing.T, key string, rootDir string) Mount {
+				return &FSMount{testdata.FS, testdata.FSPathCarV2} // purposely giving a different file here.
 			},
 
-			verify: func(t *testing.T, u *Upgrader, key shard.Key, rootDir string) {
-				_, err := os.Stat(u.transientFilePath())
+			verify: func(t *testing.T, u *Upgrader, key string, rootDir string) {
+				_, err := os.Stat(u.TransientPath())
 				require.NoError(t, err)
 
 				// read the contents of the transient file.
-				tf, err := os.Open(u.transientFilePath())
+				tf, err := os.Open(u.TransientPath())
 				require.NoError(t, err)
 				defer tf.Close()
 				bz, err := ioutil.ReadAll(tf)
@@ -111,7 +60,7 @@ func TestUpgrade(t *testing.T) {
 				require.NoError(t, tf.Close())
 
 				// read the contents of the initial file -> they should match.
-				f, err := os.Open(carv1path)
+				f, err := os.Open("../" + testdata.RootPathCarV1)
 				require.NoError(t, err)
 				defer f.Close()
 				bz2, err := ioutil.ReadAll(f)
@@ -119,7 +68,30 @@ func TestUpgrade(t *testing.T) {
 				require.NoError(t, f.Close())
 				require.EqualValues(t, bz, bz2)
 			},
-			expectedContentFilePath: carv1path,
+			expectedContentFilePath: "../" + testdata.RootPathCarV1,
+		},
+		"delete transient": {
+			setup: nil,
+			createMnt: func(t *testing.T, key string, rootDir string) Mount {
+				return &FSMount{testdata.FS, testdata.FSPathCarV2}
+			},
+			verify: func(t *testing.T, u *Upgrader, key string, rootDir string) {
+				ustat, err := u.Stat(context.TODO())
+				require.NoError(t, err)
+
+				fstat, err := os.Stat(u.TransientPath())
+				require.NoError(t, err)
+				require.EqualValues(t, fstat.Size(), ustat.Size)
+
+				err = u.DeleteTransient()
+				require.NoError(t, err)
+
+				_, err = os.Stat(u.TransientPath())
+				require.Error(t, err)
+
+				require.Empty(t, u.TransientPath())
+			},
+			expectedContentFilePath: "../" + testdata.RootPathCarV2,
 		},
 	}
 
@@ -128,7 +100,7 @@ func TestUpgrade(t *testing.T) {
 	for name, tc := range tcs {
 		tcc := tc
 		t.Run(name, func(t *testing.T) {
-			key := shard.KeyFromString(fmt.Sprintf("%d", rand.Uint64()))
+			key := fmt.Sprintf("%d", rand.Uint64())
 			rootDir := t.TempDir()
 			if tcc.setup != nil {
 				tcc.setup(t, key, rootDir)
@@ -139,12 +111,12 @@ func TestUpgrade(t *testing.T) {
 			u, err := Upgrade(mnt, rootDir, key, tcc.initial)
 			require.NoError(t, err)
 			require.NotNil(t, u)
-			tcc.verify(t, u, key, rootDir)
 
 			// fetch and verify contents
 			rd, err := u.Fetch(ctx)
 			require.NoError(t, err)
 			require.NotNil(t, rd)
+
 			bz, err := ioutil.ReadAll(rd)
 			require.NoError(t, err)
 			require.NotEmpty(t, bz)
@@ -157,10 +129,7 @@ func TestUpgrade(t *testing.T) {
 			require.NoError(t, f.Close())
 			require.EqualValues(t, bz2, bz)
 
-			// no transient file should exist as it's cleaned up when reader is closed and ref count drops to zero.
-			_, err = os.Stat(u.transientFilePath())
-			require.Error(t, err)
-
+			tcc.verify(t, u, key, rootDir)
 		})
 	}
 }
@@ -189,9 +158,9 @@ func (c *countingMount) Count() int {
 
 func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	ctx := context.Background()
-	mnt := &countingMount{Mount: &FSMount{testdata, carv2path}}
+	mnt := &countingMount{Mount: &FSMount{testdata.FS, testdata.FSPathCarV2}}
 
-	key := shard.KeyFromString(fmt.Sprintf("%d", rand.Uint64()))
+	key := fmt.Sprintf("%d", rand.Uint64())
 	rootDir := t.TempDir()
 	u, err := Upgrade(mnt, rootDir, key, "")
 	require.NoError(t, err)
@@ -199,18 +168,16 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	// now fetch in parallel
 	cnt := 20
-	var mu sync.Mutex
-	readers := make([]Reader, 0, cnt)
+	readers := make([]Reader, cnt)
 	grp, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < cnt; i++ {
+		i := i
 		grp.Go(func() error {
 			rd, err := u.Fetch(ctx)
 			if err != nil {
 				return err
 			}
-			mu.Lock()
-			readers = append(readers, rd)
-			mu.Unlock()
+			readers[i] = rd
 			return nil
 		})
 	}
@@ -218,14 +185,10 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	// file should have been fetched only once
 	require.EqualValues(t, 1, mnt.Count())
 	// ensure transient exists
-	_, err = os.Stat(u.transientFilePath())
+	_, err = os.Stat(u.TransientPath())
 	require.NoError(t, err)
 
-	// ensure all readers have the correct content and close them all.
-	mu.Lock()
-	defer mu.Unlock()
-
-	carF, err := os.Open(carv2path)
+	carF, err := os.Open("../" + testdata.RootPathCarV2)
 	require.NoError(t, err)
 	carBytes, err := ioutil.ReadAll(carF)
 	require.NoError(t, err)
@@ -253,18 +216,23 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	// file should have been fetched only once
 	require.EqualValues(t, 1, mnt.Count())
-	// ensure transient has been removed as all readers have been closed.
-	_, err = os.Stat(u.transientFilePath())
-	require.Error(t, err)
+
+	// check transient still exists
+	_, err = os.Stat(u.TransientPath())
+	require.NoError(t, err)
+
+	// delete the transient
+	err = os.Remove(u.TransientPath())
+	require.NoError(t, err)
 
 	// fetch again and file should have been fetched twice
 	rd, err := u.Fetch(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, mnt.Count())
-	_, err = os.Stat(u.transientFilePath())
+	_, err = os.Stat(u.TransientPath())
 	require.NoError(t, err)
 
 	require.NoError(t, rd.Close())
-	_, err = os.Stat(u.transientFilePath())
-	require.Error(t, err)
+	_, err = os.Stat(u.TransientPath())
+	require.NoError(t, err)
 }

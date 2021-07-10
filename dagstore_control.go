@@ -14,8 +14,6 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
-
-	opFlush // only for tests
 )
 
 func (o OpType) String() string {
@@ -25,8 +23,7 @@ func (o OpType) String() string {
 		"OpShardDestroy",
 		"OpShardAcquire",
 		"OpShardFail",
-		"OpShardRelease",
-		"opFlush"}[o]
+		"OpShardRelease"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -51,8 +48,7 @@ func (d *DAGStore) control() {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
-				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
-				_ = d.queueTask(&task{op: OpShardFail, shard: tsk.shard, err: err}, d.internalCh)
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
 				break
 			}
 
@@ -85,29 +81,45 @@ func (d *DAGStore) control() {
 
 		case OpShardAcquire:
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
-			// TODO What if Shard is in the ShardStateErrored state  here ? For now, that will block the acquirer as
-			// we add the acquirer to the WaitQueue here.
 
-			// We should probably disallow all ops for a shards in
-			// the errored state except for the recover op. ?
+			// if the shard is errored, fail the acquire immediately.
+			// TODO requires test
+			if s.state == ShardStateErrored {
+				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, s.wRegister)
+				break
+			}
 
-			if s.state != ShardStateAvailable {
+			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 				break
 			}
 
-			// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
+			// mark as serving.
+			s.state = ShardStateServing
+
+			// optimistically increment the refcount to acquire the shard.
+			// The goroutine will send an `OpShardRelease` task
 			// to the event loop if it fails to acquire the shard.
 			s.refs++
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
-			if (s.state != ShardStateAvailable && s.state != ShardStateErrored) || s.refs <= 0 {
+			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
 				log.Warn("ignored illegal request to release shard")
 				break
 			}
+
+			// decrement refcount.
 			s.refs--
+
+			// reset state back to available, if we were the last
+			// active acquirer.
+			if s.refs == 0 {
+				s.state = ShardStateAvailable
+			}
 
 		case OpShardFail:
 			s.state = ShardStateErrored
@@ -131,11 +143,23 @@ func (d *DAGStore) control() {
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
-			// TODO What about all those who have already acquired
+			// Should we interrupt/disturb active acquirers? No.
+			//
+			// This part doesn't know which kind of error occurred.
+			// It could be that the index has disappeared for new acquirers, but
+			// active acquirers already have it.
+			//
+			// If this is a physical error (e.g. shard data was physically
+			// deleted, or corrupted), we'll leave to the ShardAccessor (and the
+			// ReadBlockstore) to fail at some point. At that stage, the caller
+			// will call ShardAccessor#Close and eventually all active
+			// references will be released, setting the shard in an errored
+			// state with zero refcount.
+
 			// TODO notify application.
 
 		case OpShardDestroy:
-			if s.refs > 0 {
+			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
 				res := &ShardResult{Key: s.key, Error: err}
 				d.sendResult(res, tsk.waiter)
@@ -147,14 +171,25 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
-		case opFlush:
-			res := &ShardResult{Key: s.key, Error: nil}
-			d.sendResult(res, tsk.waiter)
 		}
 
 		// persist the current shard state.
 		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		}
+
+		// send a notification if the user provided a notification channel.
+		if d.traceCh != nil {
+			n := Trace{
+				Key: s.key,
+				Op:  tsk.op,
+				After: ShardInfo{
+					ShardState: s.state,
+					Error:      s.err,
+					refs:       s.refs,
+				},
+			}
+			d.traceCh <- n
 		}
 
 		s.lk.Unlock()
