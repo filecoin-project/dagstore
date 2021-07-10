@@ -84,11 +84,15 @@ func (d *DAGStore) control() {
 
 		case OpShardAcquire:
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
-			// TODO What if Shard is in the ShardStateErrored state  here ? For now, that will block the acquirer as
-			// we add the acquirer to the WaitQueue here.
 
-			// We should probably disallow all ops for a shards in
-			// the errored state except for the recover op. ?
+			// if the shard is errored, fail the acquire immediately.
+			// TODO requires test
+			if s.state == ShardStateErrored {
+				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, s.wRegister)
+				break
+			}
 
 			if s.state != ShardStateAvailable {
 				// shard state isn't active yet; make this acquirer wait.
