@@ -24,7 +24,14 @@ func (f *FSMount) Close() error {
 	return nil // TODO
 }
 
-func (f *FSMount) Fetch(_ context.Context) (Reader, error) {
+func (f *FSMount) Fetch(ctx context.Context) (Reader, error) {
+	// yield if the context is cancelled.
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	file, err := f.FS.Open(f.Path)
 	return &fsReader{File: file}, err
 }

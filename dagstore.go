@@ -61,6 +61,7 @@ type DAGStore struct {
 	ctx      context.Context
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+	traceCh  chan<- Trace
 }
 
 type dispatch struct {
@@ -96,6 +97,11 @@ type Config struct {
 
 	// MountRegistry contains the set of recognized mount types.
 	MountRegistry *mount.Registry
+
+	// TraceCh is a channel where the caller desires to be notified of every
+	// shard operation. Publishing to this channel blocks the event loop, so the
+	// caller must ensure the channel is serviced appropriately.
+	TraceCh chan<- Trace
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -150,6 +156,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dispatchCh:   make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
 		ctx:          ctx,
 		cancelFn:     cancel,
+		traceCh:      cfg.TraceCh,
 	}
 
 	if err := dagst.restoreState(); err != nil {
@@ -212,7 +219,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key, opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key.String(), opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -276,20 +283,12 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
 }
-func (d *DAGStore) flush(ctx context.Context, key shard.Key, out chan ShardResult) error {
-	d.lk.Lock()
-	s, ok := d.shards[key]
-	if !ok {
-		d.lk.Unlock()
-		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
-	}
-	d.lk.Unlock()
 
-	tsk := &task{op: opFlush, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
-	return d.queueTask(tsk, d.externalCh)
+type Trace struct {
+	Key   shard.Key
+	Op    OpType
+	After ShardInfo
 }
-
-type AllShardsInfo map[shard.Key]ShardInfo
 
 type ShardInfo struct {
 	ShardState
@@ -313,6 +312,8 @@ func (d *DAGStore) GetShardInfo(k shard.Key) (ShardInfo, error) {
 	s.lk.RUnlock()
 	return info, nil
 }
+
+type AllShardsInfo map[shard.Key]ShardInfo
 
 // AllShardsInfo returns the current state of all registered shards, as well as
 // any errors.

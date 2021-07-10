@@ -14,8 +14,6 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
-
-	opFlush // only for tests
 )
 
 func (o OpType) String() string {
@@ -25,8 +23,7 @@ func (o OpType) String() string {
 		"OpShardDestroy",
 		"OpShardAcquire",
 		"OpShardFail",
-		"OpShardRelease",
-		"opFlush"}[o]
+		"OpShardRelease"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -174,14 +171,25 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
-		case opFlush:
-			res := &ShardResult{Key: s.key, Error: nil}
-			d.sendResult(res, tsk.waiter)
 		}
 
 		// persist the current shard state.
 		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		}
+
+		// send a notification if the user provided a notification channel.
+		if d.traceCh != nil {
+			n := Trace{
+				Key: s.key,
+				Op:  tsk.op,
+				After: ShardInfo{
+					ShardState: s.state,
+					Error:      s.err,
+					refs:       s.refs,
+				},
+			}
+			d.traceCh <- n
 		}
 
 		s.lk.Unlock()
