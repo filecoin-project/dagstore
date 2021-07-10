@@ -5,7 +5,6 @@ import (
 	"context"
 	"embed"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -255,9 +254,7 @@ func TestConcurrentAcquires(t *testing.T) {
 }
 
 func TestRestartRestoresState(t *testing.T) {
-	indicesDir, err := ioutil.TempDir("", "")
-	require.NoError(t, err)
-	defer os.RemoveAll(indicesDir)
+	indicesDir := t.TempDir()
 
 	dir := t.TempDir()
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
