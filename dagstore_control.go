@@ -51,8 +51,7 @@ func (d *DAGStore) control() {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
-				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
-				_ = d.failShard(s, err, d.internalCh)
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
 				break
 			}
 

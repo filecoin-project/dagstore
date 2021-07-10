@@ -2,7 +2,6 @@ package dagstore
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/ipld/go-car/v2"
@@ -23,7 +22,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
-		_ = d.failShard(s, fmt.Errorf("failed to acquire reader of mount: %w", err), d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
 
 		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
@@ -40,7 +39,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
-		_ = d.failShard(s, fmt.Errorf("failed to recover index for shard %s: %w", k, err), d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to recover index for shard %s: %w", k, err)
 
 		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
@@ -58,7 +57,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Mount) {
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
-		_ = d.failShard(s, fmt.Errorf("failed to acquire reader of mount: %w", err), d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
 		return
 	}
 	defer reader.Close()
@@ -71,11 +70,11 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 	//  https://github.com/filecoin-project/dagstore/issues/50
 	idx, err := car.ReadOrGenerateIndex(reader)
 	if err != nil {
-		_ = d.failShard(s, fmt.Errorf("failed to read/generate CAR Index: %w", err), d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to read/generate CAR Index: %w", err)
 		return
 	}
 	if err := d.indices.AddFullIndex(s.key, idx); err != nil {
-		_ = d.failShard(s, fmt.Errorf("failed to add index for shard: %w", err), d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to add index for shard: %w", err)
 		return
 	}
 
