@@ -39,7 +39,6 @@ func (d *DAGStore) control() {
 		if tsk, err = d.consumeNext(); err != nil {
 			break
 		}
-
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
 		s := tsk.shard
@@ -49,13 +48,17 @@ func (d *DAGStore) control() {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
-				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
-				_ = d.queueTask(&task{op: OpShardFail, shard: tsk.shard, err: err}, d.internalCh)
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
 				break
 			}
 
 			s.state = ShardStateInitializing
-
+			// if we already have the index for this shard, there's nothing to do here.
+			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.internalCh)
+				break
+			}
+			// otherwise, generate and persist an Index for the CAR payload of the given Shard.
 			go d.initializeAsync(tsk.ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
@@ -69,6 +72,8 @@ func (d *DAGStore) control() {
 
 			// trigger queued acquisition waiters.
 			for _, w := range s.wAcquire {
+				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
+				// to the event loop if it fails to acquire the shard.
 				s.refs++
 				go d.acquireAsync(tsk.ctx, w, s, s.mount)
 			}
@@ -76,24 +81,42 @@ func (d *DAGStore) control() {
 
 		case OpShardAcquire:
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
+
+			// if the shard is errored, fail the acquire immediately.
+			// TODO requires test
+			if s.state == ShardStateErrored {
+				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, s.wRegister)
+				break
+			}
+
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 				break
 			}
 
+			// mark as serving.
 			s.state = ShardStateServing
-			s.refs++
 
+			// optimistically increment the refcount to acquire the shard.
+			// The goroutine will send an `OpShardRelease` task
+			// to the event loop if it fails to acquire the shard.
+			s.refs++
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
-				log.Warnf("ignored illegal request to release shard")
+				log.Warn("ignored illegal request to release shard")
 				break
 			}
+
+			// decrement refcount.
 			s.refs--
 
+			// reset state back to available, if we were the last
+			// active acquirer.
 			if s.refs == 0 {
 				s.state = ShardStateAvailable
 			}
@@ -120,6 +143,19 @@ func (d *DAGStore) control() {
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
+			// Should we interrupt/disturb active acquirers? No.
+			//
+			// This part doesn't know which kind of error occurred.
+			// It could be that the index has disappeared for new acquirers, but
+			// active acquirers already have it.
+			//
+			// If this is a physical error (e.g. shard data was physically
+			// deleted, or corrupted), we'll leave to the ShardAccessor (and the
+			// ReadBlockstore) to fail at some point. At that stage, the caller
+			// will call ShardAccessor#Close and eventually all active
+			// references will be released, setting the shard in an errored
+			// state with zero refcount.
+
 			// TODO notify application.
 
 		case OpShardDestroy:
@@ -140,6 +176,20 @@ func (d *DAGStore) control() {
 		// persist the current shard state.
 		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		}
+
+		// send a notification if the user provided a notification channel.
+		if d.traceCh != nil {
+			n := Trace{
+				Key: s.key,
+				Op:  tsk.op,
+				After: ShardInfo{
+					ShardState: s.state,
+					Error:      s.err,
+					refs:       s.refs,
+				},
+			}
+			d.traceCh <- n
 		}
 
 		s.lk.Unlock()

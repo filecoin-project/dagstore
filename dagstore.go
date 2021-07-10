@@ -61,6 +61,7 @@ type DAGStore struct {
 	ctx      context.Context
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+	traceCh  chan<- Trace
 }
 
 type dispatch struct {
@@ -96,6 +97,11 @@ type Config struct {
 
 	// MountRegistry contains the set of recognized mount types.
 	MountRegistry *mount.Registry
+
+	// TraceCh is a channel where the caller desires to be notified of every
+	// shard operation. Publishing to this channel blocks the event loop, so the
+	// caller must ensure the channel is serviced appropriately.
+	TraceCh chan<- Trace
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -150,6 +156,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dispatchCh:   make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
 		ctx:          ctx,
 		cancelFn:     cancel,
+		traceCh:      cfg.TraceCh,
 	}
 
 	if err := dagst.restoreState(); err != nil {
@@ -159,20 +166,33 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	// reset in-progress states.
 	for _, s := range dagst.shards {
+		// reset to available, as we have no active acquirers at start.
 		if s.state == ShardStateServing {
-			// no active acquirers at start.
 			s.state = ShardStateAvailable
 		}
+
+		// Note: An available shard whose index has disappeared across restarts
+		// will fail on the first acquisition.
+
+		// handle shards that were initializing when we shut down.
 		if s.state == ShardStateInitializing {
-			// restart the registration.
-			s.state = ShardStateNew
-			_ = dagst.queueTask(&task{op: OpShardRegister, shard: s}, dagst.externalCh)
+			// if we already have the index for the shard, there's nothing else to do.
+			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				s.state = ShardStateAvailable
+			} else {
+				// restart the registration.
+				s.state = ShardStateNew
+				_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+			}
 		}
 	}
 
+	// spawn the control goroutine.
 	dagst.wg.Add(1)
 	go dagst.control()
 
+	// spawn the dispatcher goroutine, responsible for pumping async results
+	// back to the caller.
 	dagst.wg.Add(1)
 	go dagst.dispatcher()
 
@@ -198,7 +218,8 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
-	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, opts.ExistingTransient)
+	// wrap the original mount in an upgrader.
+	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key.String(), opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -263,12 +284,36 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	return d.queueTask(tsk, d.externalCh)
 }
 
-type AllShardsInfo map[shard.Key]ShardInfo
+type Trace struct {
+	Key   shard.Key
+	Op    OpType
+	After ShardInfo
+}
 
 type ShardInfo struct {
 	ShardState
 	Error error
+	refs  uint32
 }
+
+// GetShardInfo returns the current state of shard with key k.
+//
+// If the shard is not known, ErrShardUnknown is returned.
+func (d *DAGStore) GetShardInfo(k shard.Key) (ShardInfo, error) {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+	s, ok := d.shards[k]
+	if !ok {
+		return ShardInfo{}, ErrShardUnknown
+	}
+
+	s.lk.RLock()
+	info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
+	s.lk.RUnlock()
+	return info, nil
+}
+
+type AllShardsInfo map[shard.Key]ShardInfo
 
 // AllShardsInfo returns the current state of all registered shards, as well as
 // any errors.
@@ -279,7 +324,7 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 	ret := make(AllShardsInfo, len(d.shards))
 	for k, s := range d.shards {
 		s.lk.RLock()
-		info := ShardInfo{ShardState: s.state, Error: s.err}
+		info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
 		s.lk.RUnlock()
 		ret[k] = info
 	}
@@ -334,4 +379,13 @@ func ensureDir(path string) error {
 		return fmt.Errorf("path %s exists, and it is not a directory", path)
 	}
 	return nil
+}
+
+// failShard queues a shard failure (does not fail it immediately). It is
+// suitable for usage both outside and inside the event loop, depending on the
+// channel passed.
+func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
+	// TODO failShard will fire the failure notification to the application soon.
+	err := fmt.Errorf(format, args...)
+	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
 }

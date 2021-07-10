@@ -96,10 +96,6 @@ func (t *PersistedShard) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	if err := cbg.WriteBool(w, t.Indexed); err != nil {
-		return err
-	}
-
 	// t.TransientPath (string) (string)
 	if len("TransientPath") > cbg.MaxLength {
 		return xerrors.Errorf("Value in field \"TransientPath\" was too long")
@@ -112,16 +108,6 @@ func (t *PersistedShard) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	if len(t.TransientPath) > cbg.MaxLength {
-		return xerrors.Errorf("Value in field t.TransientPath was too long")
-	}
-
-	if _, err := w.Write(cbg.CborEncodeMajorType(cbg.MajTextString, uint64(len(t.TransientPath)))); err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte(t.TransientPath)); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -200,25 +186,6 @@ func (t *PersistedShard) UnmarshalCBOR(r io.Reader) error {
 			}
 			if maj != cbg.MajOther {
 				return fmt.Errorf("booleans must be major type 7")
-			}
-			switch extra {
-			case 20:
-				t.Indexed = false
-			case 21:
-				t.Indexed = true
-			default:
-				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
-			}
-			// t.TransientPath (string) (string)
-		case "TransientPath":
-
-			{
-				sval, err := cbg.ReadString(br)
-				if err != nil {
-					return err
-				}
-
-				t.TransientPath = string(sval)
 			}
 
 		default:

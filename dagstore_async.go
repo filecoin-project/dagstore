@@ -2,11 +2,9 @@ package dagstore
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/ipld/go-car/v2"
-	carindex "github.com/ipld/go-car/v2/index"
 )
 
 //
@@ -20,21 +18,37 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	k := s.key
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
-		err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// fail the shard
+		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
+
+		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
 	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
-		err = fmt.Errorf("failed to recover index for shard %s: %w", k, err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		if err := reader.Close(); err != nil {
+			log.Errorf("failed to close mount reader: %s", err)
+		}
+
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// fail the shard
+		_ = d.failShard(s, d.completionCh, "failed to recover index for shard %s: %w", k, err)
+
+		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
 
-	sa, err := NewShardAccessor(k, reader, idx)
+	sa, err := NewShardAccessor(reader, idx, s)
+
+	// send the shard accessor to the caller.
 	d.sendResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 
@@ -43,38 +57,24 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Mount) {
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
-		err = fmt.Errorf("failed to acquire reader of mount: %w", err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
 		return
 	}
-
 	defer reader.Close()
 
-	carreader, err := car.NewReader(reader)
+	// works for both CARv1 and CARv2.
+	// TODO avoid using this API since it's too opaque; if an inline index
+	//  exists, this API returns quickly, if not, an index will be generated
+	//  which is a costly operation in terms of IO and wall clock time. The DAG
+	//  store will need to have control over scheduling of index generation.
+	//  https://github.com/filecoin-project/dagstore/issues/50
+	idx, err := car.ReadOrGenerateIndex(reader)
 	if err != nil {
-		err = fmt.Errorf("failed to read car: %w", err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
+		_ = d.failShard(s, d.completionCh, "failed to read/generate CAR Index: %w", err)
 		return
 	}
-
-	if has := carreader.Header.HasIndex(); !has {
-		err = fmt.Errorf("processing of unindexed cars unimplemented")
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
-		return
-	}
-
-	ir := carreader.IndexReader()
-	idx, err := carindex.ReadFrom(ir)
-	if err != nil {
-		err = fmt.Errorf("failed to read carv2 index: %w", err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.completionCh)
-		return
-	}
-
-	err = d.indices.AddFullIndex(s.key, idx)
-	if err != nil {
-		err = fmt.Errorf("failed to add index for shard: %w", err)
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: err}, d.internalCh)
+	if err := d.indices.AddFullIndex(s.key, idx); err != nil {
+		_ = d.failShard(s, d.completionCh, "failed to add index for shard: %w", err)
 		return
 	}
 
