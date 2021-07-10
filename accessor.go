@@ -50,9 +50,8 @@ func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 // with it, and decrementing internal refcounts.
 func (sa *ShardAccessor) Close() error {
 	if err := sa.data.Close(); err != nil {
-		log.Errorf("failed to close shard: %s", err)
+		log.Warnf("failed to close shard: %s", err)
 	}
-
 	tsk := &task{op: OpShardRelease, shard: sa.shard}
 	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
 }
