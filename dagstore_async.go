@@ -23,7 +23,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: fmt.Errorf("failed to acquire reader of mount: %w", err)}, d.completionCh)
+		_ = d.failShard(s, fmt.Errorf("failed to acquire reader of mount: %w", err), d.completionCh)
 
 		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
@@ -40,7 +40,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
-		_ = d.queueTask(&task{op: OpShardFail, shard: s, err: fmt.Errorf("failed to recover index for shard %s: %w", k, err)}, d.completionCh)
+		_ = d.failShard(s, fmt.Errorf("failed to recover index for shard %s: %w", k, err), d.completionCh)
 
 		// send the shard error to the caller.
 		d.sendResult(&ShardResult{Key: k, Error: err}, w)
@@ -80,8 +80,4 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 	}
 
 	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
-}
-
-func (d *DAGStore) failShard(s *Shard, err error, ch chan *task) error {
-	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
 }

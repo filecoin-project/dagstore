@@ -52,7 +52,7 @@ func (d *DAGStore) control() {
 			if s.state != ShardStateNew {
 				// sanity check failed
 				err := fmt.Errorf("%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
-				_ = d.queueTask(&task{op: OpShardFail, shard: tsk.shard, err: err}, d.internalCh)
+				_ = d.failShard(s, err, d.internalCh)
 				break
 			}
 

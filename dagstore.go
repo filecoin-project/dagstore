@@ -360,3 +360,10 @@ func ensureDir(path string) error {
 	}
 	return nil
 }
+
+// failShard queues a shard failure (does not fail it immediately). It is
+// suitable for usage both outside and inside the event loop, depending on the
+// channel passed.
+func (d *DAGStore) failShard(s *Shard, err error, ch chan *task) error {
+	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
+}
