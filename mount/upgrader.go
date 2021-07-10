@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -18,6 +19,7 @@ import (
 type Upgrader struct {
 	underlying  Mount
 	passthrough bool
+	key         string
 
 	lk        sync.Mutex
 	transient string
@@ -29,8 +31,8 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, rootdir, initial string) (*Upgrader, error) {
-	ret := &Upgrader{underlying: underlying, rootdir: rootdir}
+func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, error) {
+	ret := &Upgrader{underlying: underlying, key: key, rootdir: rootdir}
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
@@ -66,6 +68,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		if _, err := os.Stat(u.transient); err == nil {
 			return os.Open(u.transient)
 		}
+		// TODO add size check.
 	}
 
 	// transient appears to be dead, refetch.
@@ -120,7 +123,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	if u.transient != "" {
 		_ = os.Remove(u.transient)
 	}
-	file, err := os.CreateTemp(u.rootdir, "transient")
+	file, err := os.CreateTemp(u.rootdir, "transient-"+u.key+"-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file: %w", err)
 	}
@@ -159,6 +162,12 @@ func (u *Upgrader) DeleteTransient() error {
 
 	if u.transient == "" {
 		return nil // nothing to do.
+	}
+
+	// refuse to delete the transient if it's not being managed by us (i.e. in
+	// our transients root directory).
+	if _, err := filepath.Rel(u.rootdir, u.transient); err != nil {
+		return nil
 	}
 
 	err := os.Remove(u.transient)
