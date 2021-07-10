@@ -10,6 +10,7 @@ import (
 	"github.com/filecoin-project/dagstore/index"
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
+	"github.com/hashicorp/go-multierror"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -329,6 +330,59 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 		ret[k] = info
 	}
 	return ret
+}
+
+// GC attempts to reclaim the transient files of shards that are currently
+// available but inactive.
+//
+// It is not strictly atomic for now, as it determines which shards to reclaim
+// first, sends operations to the event loop, and waits for them to execute.
+// In the meantime, there could be state transitions that change reclaimability
+// of shards (some shards deemed reclaimable are no longer so, and vice versa).
+//
+// However, the event loop checks for safety prior to deletion, so it will skip
+// over shards that are no longer safe to delete.
+func (d *DAGStore) GC(ctx context.Context) (map[shard.Key]error, error) {
+	var (
+		merr    *multierror.Error
+		reclaim []*Shard
+	)
+
+	d.lk.RLock()
+	for _, s := range d.shards {
+		s.lk.RLock()
+		if s.state == ShardStateAvailable || s.state == ShardStateErrored {
+			reclaim = append(reclaim, s)
+		}
+		s.lk.RUnlock()
+	}
+	d.lk.RUnlock()
+
+	var await int
+	ch := make(chan ShardResult, len(reclaim))
+	for _, s := range reclaim {
+		tsk := &task{op: OpShardGC, shard: s, waiter: &waiter{ctx: ctx, outCh: ch}}
+
+		err := d.queueTask(tsk, d.externalCh)
+		if err == nil {
+			await++
+		} else {
+			merr = multierror.Append(merr, fmt.Errorf("failed to enqueue GC task for shard %s: %w", s.key, err))
+		}
+	}
+
+	// collect all results.
+	results := make(map[shard.Key]error, await)
+	for i := 0; i < await; i++ {
+		select {
+		case res := <-ch:
+			results[res.Key] = res.Error
+		case <-ctx.Done():
+			return results, ctx.Err()
+		}
+	}
+
+	return results, nil
 }
 
 func (d *DAGStore) Close() error {
