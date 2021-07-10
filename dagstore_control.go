@@ -134,6 +134,7 @@ func (d *DAGStore) control() {
 					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
 				d.sendResult(res, s.wRegister)
+				s.wRegister = nil
 			}
 
 			// fail waiting acquirers.
