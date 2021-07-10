@@ -134,7 +134,19 @@ func (d *DAGStore) control() {
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
-			// TODO What about all those who have already acquired
+			// Should we interrupt/disturb active acquirers? No.
+			//
+			// This part doesn't know which kind of error occurred.
+			// It could be that the index has disappeared for new acquirers, but
+			// active acquirers already have it.
+			//
+			// If this is a physical error (e.g. shard data was physically
+			// deleted, or corrupted), we'll leave to the ShardAccessor (and the
+			// ReadBlockstore) to fail at some point. At that stage, the caller
+			// will call ShardAccessor#Close and eventually all active
+			// references will be released, setting the shard in an errored
+			// state with zero refcount.
+
 			// TODO notify application.
 
 		case OpShardDestroy:
