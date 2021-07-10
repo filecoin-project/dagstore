@@ -94,23 +94,35 @@ func (d *DAGStore) control() {
 				break
 			}
 
-			if s.state != ShardStateAvailable {
+			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 				break
 			}
 
-			// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
+			// mark as serving.
+			s.state = ShardStateServing
+
+			// optimistically increment the refcount to acquire the shard.
+			// The goroutine will send an `OpShardRelease` task
 			// to the event loop if it fails to acquire the shard.
 			s.refs++
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
 
 		case OpShardRelease:
-			if (s.state != ShardStateAvailable && s.state != ShardStateErrored) || s.refs <= 0 {
+			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
 				log.Warn("ignored illegal request to release shard")
 				break
 			}
+
+			// decrement refcount.
 			s.refs--
+
+			// reset state back to available, if we were the last
+			// active acquirer.
+			if s.refs == 0 {
+				s.state = ShardStateAvailable
+			}
 
 		case OpShardFail:
 			s.state = ShardStateErrored
@@ -150,7 +162,7 @@ func (d *DAGStore) control() {
 			// TODO notify application.
 
 		case OpShardDestroy:
-			if s.refs > 0 {
+			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
 				res := &ShardResult{Key: s.key, Error: err}
 				d.sendResult(res, tsk.waiter)

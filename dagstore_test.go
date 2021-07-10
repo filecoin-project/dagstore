@@ -445,6 +445,13 @@ func acquireShardThenRelease(t *testing.T, dagst *DAGStore, k shard.Key, n int) 
 				return err
 			}
 
+			state, err := dagst.GetShardInfo(k)
+			if err != nil {
+				return err
+			} else if state.ShardState != ShardStateServing {
+				return fmt.Errorf("expected state ShardStateServing; was: %d", state.ShardState)
+			}
+
 			if _, err := bs.Get(rootCID); err != nil {
 				return err
 			}
@@ -458,7 +465,7 @@ func acquireShardThenRelease(t *testing.T, dagst *DAGStore, k shard.Key, n int) 
 
 	require.NoError(t, grp.Wait())
 	info := flushAndGetShardState(t, dagst, k)
-	require.Equal(t, ShardStateAvailable, info.ShardState)
+	require.Equal(t, ShardStateServing, info.ShardState)
 	require.NoError(t, info.Error)
 	// refs should be equal to number of acquirers since we've not closed any acquirer/released any shard.
 	require.EqualValues(t, n, info.refs)
@@ -471,14 +478,7 @@ func acquireShardThenRelease(t *testing.T, dagst *DAGStore, k shard.Key, n int) 
 	grp2, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < n; i++ {
 		ac := accessors[i]
-		grp2.Go(func() error {
-			mu.RLock()
-			defer mu.RUnlock()
-			if err := ac.Close(); err != nil {
-				return err
-			}
-			return nil
-		})
+		grp2.Go(ac.Close)
 	}
 
 	require.NoError(t, grp2.Wait())

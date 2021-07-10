@@ -159,8 +159,17 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	// reset in-progress states.
 	for _, s := range dagst.shards {
+		// reset to available, as we have no active acquirers at start.
+		if s.state == ShardStateServing {
+			s.state = ShardStateAvailable
+		}
+
+		// Note: An available shard whose index has disappeared across restarts
+		// will fail on the first acquisition.
+
+		// handle shards that were initializing when we shut down.
 		if s.state == ShardStateInitializing {
-			// if we already have the index for the shard, there's nothing to do.
+			// if we already have the index for the shard, there's nothing else to do.
 			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
@@ -171,9 +180,12 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		}
 	}
 
+	// spawn the control goroutine.
 	dagst.wg.Add(1)
 	go dagst.control()
 
+	// spawn the dispatcher goroutine, responsible for pumping async results
+	// back to the caller.
 	dagst.wg.Add(1)
 	go dagst.dispatcher()
 
@@ -199,6 +211,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 		return fmt.Errorf("%s: %w", key.String(), ErrShardExists)
 	}
 
+	// wrap the original mount in an upgrader.
 	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key, opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
@@ -371,6 +384,7 @@ func ensureDir(path string) error {
 // suitable for usage both outside and inside the event loop, depending on the
 // channel passed.
 func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
+	// TODO failShard will fire the failure notification to the application soon.
 	err := fmt.Errorf(format, args...)
 	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
 }

@@ -26,20 +26,21 @@ func (w waiter) deliver(res *ShardResult) {
 type Shard struct {
 	lk sync.RWMutex
 
-	// IMMUTABLE FIELDS
-	// safe to read outside the event loop without a lock
+	// Immutable fields.
+	// Safe to read outside the event loop without a lock.
 	d     *DAGStore       // backreference
 	key   shard.Key       // persisted in PersistedShard.Key
 	mount *mount.Upgrader // persisted in PersistedShard.URL (underlying)
 
-	// MUTABLE FIELDS
-	// cannot read/write outside event loop.
+	// Mutable fields.
+	// Cannot read/write outside event loop.
 	state ShardState // persisted in PersistedShard.State
-	err   error      // populated if shard state is errored; persisted in PersistedShard.Error
+	err   error      // persisted in PersistedShard.Error; populated if shard state is errored.
 
-	wRegister *waiter
-	wAcquire  []*waiter
-	wDestroy  *waiter
+	// Waiters.
+	wRegister *waiter   // waiter for registration result.
+	wAcquire  []*waiter // waiters for acquiring the shard.
+	wDestroy  *waiter   // waiter for shard destruction.
 
 	refs uint32 // number of DAG accessors currently open
 }
