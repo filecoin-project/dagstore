@@ -1,72 +1,26 @@
 package dagstore
 
 import (
-	"bytes"
 	"context"
-	"embed"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
-	"github.com/ipfs/go-cid"
+	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/ipfs/go-datastore"
 	dsq "github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
-	"github.com/ipld/go-car/v2"
-
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	carv1path = "testdata/sample-v1.car"
-	carv2path = "testdata/sample-wrapped-v2.car"
-)
-
-var (
-	//go:embed testdata/*
-	testdata embed.FS
-
-	carv1 []byte
-	carv2 []byte
-
-	carv2mnt = &mount.FSMount{FS: testdata, Path: carv2path}
-
-	// rootCID is the root CID of the carv2 for testing.
-	rootCID cid.Cid
-)
+var carv2mnt = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
 
 func init() {
 	_ = logging.SetLogLevel("dagstore", "DEBUG")
-
-	var err error
-	carv1, err = testdata.ReadFile(carv1path)
-	if err != nil {
-		panic(err)
-	}
-
-	carv2, err = testdata.ReadFile(carv2path)
-	if err != nil {
-		panic(err)
-	}
-
-	reader, err := car.NewReader(bytes.NewReader(carv2))
-	if err != nil {
-		panic(fmt.Errorf("failed to parse carv2: %w", err))
-	}
-	defer reader.Close()
-
-	roots, err := reader.Roots()
-	if err != nil {
-		panic(fmt.Errorf("failed to obtain carv2 roots: %w", err))
-	}
-	if len(roots) == 0 {
-		panic("carv2 has no roots")
-	}
-	rootCID = roots[0]
 }
 
 func TestRegisterUsingExistingTransient(t *testing.T) {
@@ -81,7 +35,7 @@ func TestRegisterUsingExistingTransient(t *testing.T) {
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	// even though the fs mount has an empty path, the existing transient will get us through registration.
-	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: ""}, ch, RegisterOpts{ExistingTransient: carv2path})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: ""}, ch, RegisterOpts{ExistingTransient: testdata.RootPathCarV2})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -104,7 +58,7 @@ func TestRegisterCarV1(t *testing.T) {
 
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata, Path: carv1path}, ch, RegisterOpts{})
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV1}, ch, RegisterOpts{})
 	require.NoError(t, err)
 
 	res := <-ch
@@ -322,7 +276,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
 	r := testRegistry(t)
 
-	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata}))
+	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
 	require.NoError(t, err)
 
 	sink := tracer(128)
@@ -368,7 +322,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	// a template. Because UnblockCh is exported, it is a templated field, so
 	// all mounts will await for tokens on that shared channel.
 	r = testRegistry(t)
-	bm := newBlockingMount(&mount.FSMount{FS: testdata})
+	bm := newBlockingMount(&mount.FSMount{FS: testdata.FS})
 	err = r.Register("block", bm)
 	require.NoError(t, err)
 
@@ -489,7 +443,7 @@ func acquireShard(t *testing.T, dagst *DAGStore, k shard.Key, n int) []*ShardAcc
 				return fmt.Errorf("expected state ShardStateServing; was: %d", state.ShardState)
 			}
 
-			if _, err := bs.Get(rootCID); err != nil {
+			if _, err := bs.Get(testdata.RootCID); err != nil {
 				return err
 			}
 
@@ -534,7 +488,7 @@ func releaseAll(t *testing.T, dagst *DAGStore, k shard.Key, accs []*ShardAccesso
 
 func testRegistry(t *testing.T) *mount.Registry {
 	r := mount.NewRegistry()
-	err := r.Register("fs", &mount.FSMount{FS: testdata})
+	err := r.Register("fs", &mount.FSMount{FS: testdata.FS})
 	require.NoError(t, err)
 	return r
 }
