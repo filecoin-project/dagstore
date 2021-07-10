@@ -284,15 +284,21 @@ type ShardInfo struct {
 	refs  uint32
 }
 
-// GetShardInfo returns the current state of the registered shard with key k
-func (d *DAGStore) GetShardInfo(k shard.Key) ShardInfo {
+// GetShardInfo returns the current state of shard with key k.
+//
+// If the shard is not known, ErrShardUnknown is returned.
+func (d *DAGStore) GetShardInfo(k shard.Key) (ShardInfo, error) {
 	d.lk.RLock()
 	defer d.lk.RUnlock()
-	s := d.shards[k]
+	s, ok := d.shards[k]
+	if !ok {
+		return ShardInfo{}, ErrShardUnknown
+	}
+
 	s.lk.RLock()
 	info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
 	s.lk.RUnlock()
-	return info
+	return info, nil
 }
 
 // AllShardsInfo returns the current state of all registered shards, as well as

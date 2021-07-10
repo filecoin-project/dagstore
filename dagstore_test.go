@@ -496,7 +496,8 @@ func flushAndGetShardState(t *testing.T, dagst *DAGStore, key shard.Key) ShardIn
 	// wait for all existing ops for the shard to be processed by the event loop.
 	require.NoError(t, dagst.flush(context.Background(), key, ch))
 	<-ch
-	info := dagst.GetShardInfo(key)
+	info, err := dagst.GetShardInfo(key)
+	require.NoError(t, err)
 	return info
 }
 
