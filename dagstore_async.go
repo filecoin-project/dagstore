@@ -62,7 +62,13 @@ func (d *DAGStore) initializeAsync(ctx context.Context, s *Shard, mnt mount.Moun
 		return
 	}
 	defer reader.Close()
+
 	// works for both CARv1 and CARv2.
+	// TODO avoid using this API since it's too opaque; if an inline index
+	//  exists, this API returns quickly, if not, an index will be generated
+	//  which is a costly operation in terms of IO and wall clock time. The DAG
+	//  store will need to have control over scheduling of index generation.
+	//  https://github.com/filecoin-project/dagstore/issues/50
 	idx, err := car.ReadOrGenerateIndex(reader)
 	if err != nil {
 		_ = d.failShard(s, fmt.Errorf("failed to read/generate CAR Index: %w", err), d.completionCh)
