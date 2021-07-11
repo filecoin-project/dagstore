@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
-	"sync"
 	"testing"
 
 	"github.com/filecoin-project/dagstore/testdata"
@@ -134,31 +133,9 @@ func TestUpgrade(t *testing.T) {
 	}
 }
 
-type countingMount struct {
-	mu sync.Mutex
-	n  int
-
-	Mount
-}
-
-func (c *countingMount) Fetch(ctx context.Context) (Reader, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.n++
-
-	return c.Mount.Fetch(ctx)
-}
-
-func (c *countingMount) Count() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.n
-}
-
 func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	ctx := context.Background()
-	mnt := &countingMount{Mount: &FSMount{testdata.FS, testdata.FSPathCarV2}}
+	mnt := &Counting{Mount: &FSMount{testdata.FS, testdata.FSPathCarV2}}
 
 	key := fmt.Sprintf("%d", rand.Uint64())
 	rootDir := t.TempDir()
