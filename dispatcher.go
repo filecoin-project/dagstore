@@ -17,6 +17,10 @@ func (d *DAGStore) dispatcher() {
 
 func (d *DAGStore) sendResult(res *ShardResult, waiters ...*waiter) {
 	for _, w := range waiters {
+		if w.outCh == nil {
+			// no return channel; skip.
+			continue
+		}
 		d.dispatchCh <- &dispatch{w: w, res: res}
 	}
 }

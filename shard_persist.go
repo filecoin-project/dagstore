@@ -16,6 +16,7 @@ type PersistedShard struct {
 	Key   string     `json:"k"`
 	URL   string     `json:"u"`
 	State ShardState `json:"s"`
+	Lazy  bool       `json:"l"`
 	Error string     `json:"e"`
 }
 
@@ -31,6 +32,7 @@ func (s *Shard) MarshalJSON() ([]byte, error) {
 		Key:   s.key.String(),
 		URL:   u.String(),
 		State: s.state,
+		Lazy:  s.lazy,
 	}
 	if s.err != nil {
 		ps.Error = s.err.Error()
@@ -54,6 +56,7 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	// restore basics.
 	s.key = shard.KeyFromString(ps.Key)
 	s.state = ps.State
+	s.lazy = ps.Lazy
 	if ps.Error != "" {
 		s.err = errors.New(ps.Error)
 	}

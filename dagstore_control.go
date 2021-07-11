@@ -9,6 +9,7 @@ type OpType int
 
 const (
 	OpShardRegister OpType = iota
+	OpShardInitialize
 	OpShardMakeAvailable
 	OpShardDestroy
 	OpShardAcquire
@@ -20,6 +21,7 @@ const (
 func (o OpType) String() string {
 	return [...]string{
 		"OpShardRegister",
+		"OpShardInitialize",
 		"OpShardMakeAvailable",
 		"OpShardDestroy",
 		"OpShardAcquire",
@@ -38,9 +40,11 @@ func (d *DAGStore) control() {
 	)
 
 	for {
+		// consume the next task; if we're shutting down, this method will error.
 		if tsk, err = d.consumeNext(); err != nil {
 			break
 		}
+
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
 		s := tsk.shard
@@ -54,26 +58,46 @@ func (d *DAGStore) control() {
 				break
 			}
 
+			// skip initialization if shard was registered with lazy init, and
+			// respond immediately to waiter.
+			if s.lazy {
+				log.Debugw("shard registered with lazy initialization", "shard", s.key)
+				// waiter will be nil if this was a restart and not a call to Register() call.
+				if tsk.waiter != nil {
+					res := &ShardResult{Key: s.key}
+					d.sendResult(res, tsk.waiter)
+				}
+				break
+			}
+
+			// otherwise, park the registration channel and queue the init.
+			s.wRegister = tsk.waiter
+			_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: tsk.waiter}, d.internalCh)
+
+		case OpShardInitialize:
 			s.state = ShardStateInitializing
+
 			// if we already have the index for this shard, there's nothing to do here.
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.internalCh)
 				break
 			}
-			// otherwise, generate and persist an Index for the CAR payload of the given Shard.
-			go d.initializeAsync(tsk.ctx, s, s.mount)
+
+			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
 
 		case OpShardMakeAvailable:
+			s.state = ShardStateAvailable
+
 			if s.wRegister != nil {
 				res := &ShardResult{Key: s.key}
 				d.sendResult(res, s.wRegister)
 				s.wRegister = nil
 			}
 
-			s.state = ShardStateAvailable
-
 			// trigger queued acquisition waiters.
 			for _, w := range s.wAcquire {
+				s.state = ShardStateServing
+
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
@@ -96,6 +120,19 @@ func (d *DAGStore) control() {
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
+
+				// if the shard was registered with lazy init, and this is the
+				// first acquire, queue the initialization.
+				if s.state == ShardStateNew {
+					// Use the background context. We can't use the acquirer's
+					// context because there can be multiple concurrent
+					// acquirers, and if the first one cancels, the entire job
+					// would be cancelled.
+					w := *tsk.waiter
+					w.ctx = context.Background()
+					_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: &w}, d.internalCh)
+				}
+
 				break
 			}
 
