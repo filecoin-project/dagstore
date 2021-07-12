@@ -373,6 +373,46 @@ func TestRestartResumesRegistration(t *testing.T) {
 	require.Equal(t, ShardStateAvailable, traces[1].After.ShardState)
 }
 
+func TestGC(t *testing.T) {
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// register 100 shards
+	// acquire 25 with 5 acquirers, release 2 acquirers (refcount 3); non reclaimable
+	// acquire another 25, release them all, they're reclaimable
+	shards := registerShards(t, dagst, 100, carv2mnt)
+	for _, k := range shards[0:25] {
+		accessors := acquireShard(t, dagst, k, 5)
+		for _, acc := range accessors[:2] {
+			err := acc.Close()
+			require.NoError(t, err)
+		}
+	}
+	for _, k := range shards[25:50] {
+		accessors := acquireShard(t, dagst, k, 5)
+		releaseAll(t, dagst, k, accessors)
+	}
+
+	results, err := dagst.GC(context.Background())
+	require.NoError(t, err)
+	require.Len(t, results, 75) // all but the second batch of 25 have been reclaimed.
+
+	var keys []string
+	for k, err := range results {
+		keys = append(keys, k.String())
+		require.NoError(t, err)
+	}
+
+	var expect []string
+	for i := 25; i < 100; i++ {
+		expect = append(expect, fmt.Sprintf("shard-%d", i))
+	}
+	require.ElementsMatch(t, expect, keys)
+}
+
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {
@@ -479,11 +519,6 @@ func releaseAll(t *testing.T, dagst *DAGStore, k shard.Key, accs []*ShardAccesso
 		return err == nil && info.ShardState == ShardStateAvailable && info.refs == 0
 	}, 5*time.Second, 100*time.Millisecond)
 
-	// // refs should be zero now since shard accessors have been closed and transient file should be cleaned up.
-	// require.Zero(t, info.refs)
-	// _, err = os.Stat(abs)
-	// require.Error(t, err)
-	//
 }
 
 func testRegistry(t *testing.T) *mount.Registry {

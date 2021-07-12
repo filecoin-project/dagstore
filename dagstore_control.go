@@ -14,6 +14,7 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
+	OpShardGC
 )
 
 func (o OpType) String() string {
@@ -23,7 +24,8 @@ func (o OpType) String() string {
 		"OpShardDestroy",
 		"OpShardAcquire",
 		"OpShardFail",
-		"OpShardRelease"}[o]
+		"OpShardRelease",
+		"OpShardGC"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -132,6 +134,7 @@ func (d *DAGStore) control() {
 					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
 				d.sendResult(res, s.wRegister)
+				s.wRegister = nil
 			}
 
 			// fail waiting acquirers.
@@ -171,6 +174,15 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
+		case OpShardGC:
+			var err error
+			if s.state == ShardStateAvailable || s.state == ShardStateErrored {
+				err = s.mount.DeleteTransient()
+			} else {
+				err = fmt.Errorf("ignored request to GC shard in state: %d", s.state)
+			}
+			res := &ShardResult{Key: s.key, Error: err}
+			d.sendResult(res, tsk.waiter)
 		}
 
 		// persist the current shard state.
