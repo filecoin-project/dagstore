@@ -307,7 +307,7 @@ type AcquireOpts struct {
 // ShardAccessor, an object that enables various patterns of access to the data
 // contained within the shard.
 //
-// This operation may resolve near-instantaneosly if the shard is available
+// This operation may resolve near-instantaneously if the shard is available
 // locally. If not, the shard data may be fetched from its mount.
 //
 // This method returns an error synchronously if preliminary validation fails.
