@@ -213,10 +213,10 @@ func (d *DAGStore) control() {
 
 		case OpShardGC:
 			var err error
-			if s.state == ShardStateAvailable || s.state == ShardStateErrored {
+			if nAcq := len(s.wAcquire); s.state == ShardStateAvailable || s.state == ShardStateErrored || nAcq == 0 {
 				err = s.mount.DeleteTransient()
 			} else {
-				err = fmt.Errorf("ignored request to GC shard in state: %s", s.state)
+				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
 			}
 			res := &ShardResult{Key: s.key, Error: err}
 			d.sendResult(res, tsk.waiter)
