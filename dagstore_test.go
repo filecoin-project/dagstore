@@ -713,10 +713,6 @@ func TestIndexingFailure(t *testing.T) {
 
 }
 
-func TestIndexingFailure_Recovers(t *testing.T) {
-
-}
-
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {
