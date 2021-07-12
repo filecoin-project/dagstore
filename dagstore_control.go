@@ -37,8 +37,9 @@ func (d *DAGStore) control() {
 	defer d.wg.Done()
 
 	var (
-		tsk *task
-		err error
+		tsk       *task
+		prevState ShardState
+		err       error
 
 		// wFailure is a synthetic failure waiter that uses the DAGStore's
 		// global context and the failure channel. Only safe to actually use if
@@ -57,6 +58,8 @@ func (d *DAGStore) control() {
 
 		s := tsk.shard
 		s.lk.Lock()
+
+		prevState = s.state
 
 		switch tsk.op {
 		case OpShardRegister:
@@ -312,6 +315,8 @@ func (d *DAGStore) control() {
 			}
 			d.traceCh <- n
 		}
+
+		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
 
 		s.lk.Unlock()
 	}
