@@ -54,7 +54,7 @@ func (d *DAGStore) control() {
 		case OpShardRegister:
 			if s.state != ShardStateNew {
 				// sanity check failed
-				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'new' state; was: %d", ErrShardInitializationFailed, s.state)
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'new' state; was: %s", ErrShardInitializationFailed, s.state)
 				break
 			}
 
@@ -216,7 +216,7 @@ func (d *DAGStore) control() {
 			if s.state == ShardStateAvailable || s.state == ShardStateErrored {
 				err = s.mount.DeleteTransient()
 			} else {
-				err = fmt.Errorf("ignored request to GC shard in state: %d", s.state)
+				err = fmt.Errorf("ignored request to GC shard in state: %s", s.state)
 			}
 			res := &ShardResult{Key: s.key, Error: err}
 			d.sendResult(res, tsk.waiter)

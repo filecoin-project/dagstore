@@ -606,7 +606,7 @@ func acquireShard(t *testing.T, dagst *DAGStore, k shard.Key, n int) []*ShardAcc
 			if err != nil {
 				return err
 			} else if state.ShardState != ShardStateServing {
-				return fmt.Errorf("expected state ShardStateServing; was: %d", state.ShardState)
+				return fmt.Errorf("expected state ShardStateServing; was: %s", state.ShardState)
 			}
 
 			if _, err := bs.Get(testdata.RootCID); err != nil {
