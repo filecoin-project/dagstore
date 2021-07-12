@@ -1,13 +1,15 @@
 package dagstore
 
-// dispatcher takes care of pumping results back to callers.
-func (d *DAGStore) dispatcher() {
+// dispatcher takes care of dispatching results back to the application.
+//
+// These can be results of API operations, or shard failures.
+func (d *DAGStore) dispatcher(ch chan *dispatch) {
 	defer d.wg.Done()
 
 	var di *dispatch
 	for {
 		select {
-		case di = <-d.dispatchCh:
+		case di = <-ch:
 		case <-d.ctx.Done():
 			return
 		}
@@ -15,12 +17,12 @@ func (d *DAGStore) dispatcher() {
 	}
 }
 
-func (d *DAGStore) sendResult(res *ShardResult, waiters ...*waiter) {
+func (d *DAGStore) dispatchResult(res *ShardResult, waiters ...*waiter) {
 	for _, w := range waiters {
 		if w.outCh == nil {
 			// no return channel; skip.
 			continue
 		}
-		d.dispatchCh <- &dispatch{w: w, res: res}
+		d.dispatchResultsCh <- &dispatch{w: w, res: res}
 	}
 }

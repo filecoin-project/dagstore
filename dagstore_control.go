@@ -39,6 +39,11 @@ func (d *DAGStore) control() {
 	var (
 		tsk *task
 		err error
+
+		// wFailure is a synthetic failure waiter that uses the DAGStore's
+		// global context and the failure channel. Only safe to actually use if
+		// d.failureCh != nil.
+		wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
 	)
 
 	for {
@@ -67,7 +72,7 @@ func (d *DAGStore) control() {
 				// waiter will be nil if this was a restart and not a call to Register() call.
 				if tsk.waiter != nil {
 					res := &ShardResult{Key: s.key}
-					d.sendResult(res, tsk.waiter)
+					d.dispatchResult(res, tsk.waiter)
 				}
 				break
 			}
@@ -95,7 +100,7 @@ func (d *DAGStore) control() {
 
 			if s.wRegister != nil {
 				res := &ShardResult{Key: s.key}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
 			}
 
@@ -114,11 +119,11 @@ func (d *DAGStore) control() {
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
-			// TODO requires test
+			// TODO needs test
 			if s.state == ShardStateErrored {
 				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				break
 			}
 
@@ -175,7 +180,7 @@ func (d *DAGStore) control() {
 					Key:   s.key,
 					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
 			}
 
@@ -184,7 +189,7 @@ func (d *DAGStore) control() {
 			if len(s.wAcquire) > 0 {
 				err := fmt.Errorf("failed to acquire shard: %w", tsk.err)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, s.wAcquire...)
+				d.dispatchResult(res, s.wAcquire...)
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
@@ -201,13 +206,17 @@ func (d *DAGStore) control() {
 			// references will be released, setting the shard in an errored
 			// state with zero refcount.
 
-			// TODO notify application.
+			// Notify the application of the failure, if they provided a channel.
+			if ch := d.failureCh; ch != nil {
+				res := &ShardResult{Key: s.key, Error: s.err}
+				d.dispatchFailuresCh <- &dispatch{res: res, w: wFailure}
+			}
 
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, tsk.waiter)
+				d.dispatchResult(res, tsk.waiter)
 				break
 			}
 
@@ -224,13 +233,13 @@ func (d *DAGStore) control() {
 				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
 			}
 			res := &ShardResult{Key: s.key, Error: err}
-			d.sendResult(res, tsk.waiter)
+			d.dispatchResult(res, tsk.waiter)
 
 		case OpShardRecover:
 			if s.state != ShardStateErrored {
 				err := fmt.Errorf("refused to recover shard in state other than errored; current state: %d", s.state)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, tsk.waiter)
+				d.dispatchResult(res, tsk.waiter)
 				break
 			}
 
