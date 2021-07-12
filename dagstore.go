@@ -326,6 +326,35 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	return d.queueTask(tsk, d.externalCh)
 }
 
+type RecoverOpts struct {
+}
+
+// RecoverShard recovers a shard in ShardStateErrored state.
+//
+// If the shard referenced by the key doesn't exist, an error is returned
+// immediately and no result is delivered on the supplied channel.
+//
+// If the shard is not in the ShardStateErrored state, the operation is accepted
+// but an error will be returned quickly on the supplied channel.
+//
+// Otherwise, the recovery operation will be queued and the supplied channel
+// will be notified when it completes.
+//
+// TODO add an operation identifier to ShardResult -- starts to look like
+//  a Trace event?
+func (d *DAGStore) RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error {
+	d.lk.Lock()
+	s, ok := d.shards[key]
+	if !ok {
+		d.lk.Unlock()
+		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
+	}
+	d.lk.Unlock()
+
+	tsk := &task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	return d.queueTask(tsk, d.externalCh)
+}
+
 type Trace struct {
 	Key   shard.Key
 	Op    OpType

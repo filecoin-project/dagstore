@@ -19,6 +19,11 @@ const (
 	// currently actively serving requests.
 	ShardStateServing
 
+	// ShardStateRecovering indicates that the shard is recovering from an
+	// errored state. Such recoveries are always initiated by the user through
+	// DAGStore.RecoverShard().
+	ShardStateRecovering = 0x80
+
 	// ShardStateErrored indicates that an unexpected error was encountered
 	// during a shard operation, and therefore the shard needs to be recovered.
 	ShardStateErrored ShardState = 0xf0

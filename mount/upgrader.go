@@ -173,7 +173,8 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 
 // DeleteTransient deletes the transient associated with this Upgrader, if
 // one exists. It is the caller's responsibility to ensure the transient is
-// not in use.
+// not in use. If the tracked transient is gone, this will reset the internal
+// state to "" (no transient) to enable recovery.
 func (u *Upgrader) DeleteTransient() error {
 	u.lk.Lock()
 	defer u.lk.Unlock()
@@ -188,11 +189,10 @@ func (u *Upgrader) DeleteTransient() error {
 		return nil
 	}
 
+	// remove the transient and clear it always, even if os.Remove
+	// returns an error. This allows us to recover from errors like the user
+	// deleting the transient we're currently tracking.
 	err := os.Remove(u.transient)
-	if err != nil {
-		return err
-	}
-
 	u.transient = ""
-	return nil
+	return err
 }

@@ -16,6 +16,7 @@ const (
 	OpShardFail
 	OpShardRelease
 	OpShardGC
+	OpShardRecover
 )
 
 func (o OpType) String() string {
@@ -27,7 +28,8 @@ func (o OpType) String() string {
 		"OpShardAcquire",
 		"OpShardFail",
 		"OpShardRelease",
-		"OpShardGC"}[o]
+		"OpShardGC",
+		"OpShardRecover"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -86,6 +88,9 @@ func (d *DAGStore) control() {
 			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
 
 		case OpShardMakeAvailable:
+			// can arrive here after initializing a new shard,
+			// or when recovering from a failure.
+
 			s.state = ShardStateAvailable
 
 			if s.wRegister != nil {
@@ -220,6 +225,39 @@ func (d *DAGStore) control() {
 			}
 			res := &ShardResult{Key: s.key, Error: err}
 			d.sendResult(res, tsk.waiter)
+
+		case OpShardRecover:
+			if s.state != ShardStateErrored {
+				err := fmt.Errorf("refused to recover shard in state other than errored; current state: %d", s.state)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.sendResult(res, tsk.waiter)
+				break
+			}
+
+			// set the state to recovering.
+			s.state = ShardStateRecovering
+
+			// attempt to delete the transient first; this can happen if the
+			// transient has been removed by hand. DeleteTransient resets the
+			// transient to "" always.
+			if err := s.mount.DeleteTransient(); err != nil {
+				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
+			}
+
+			// attempt to drop the index.
+			dropped, err := d.indices.DropFullIndex(s.key)
+			if err != nil {
+				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
+			} else if !dropped {
+				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
+			}
+
+			// fetch again and reindex.
+			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
+
+		default:
+			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
+
 		}
 
 		// persist the current shard state.
