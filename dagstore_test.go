@@ -295,25 +295,29 @@ func TestRestartResumesRegistration(t *testing.T) {
 	err = dagst.RegisterShard(context.Background(), k, block, ch, RegisterOpts{})
 	require.NoError(t, err)
 
-	// receive at most one trace in 1 second.
+	// receive at most two traces in 1 second.
 	traces := make([]Trace, 16)
 	n, timedOut := sink.Read(traces, 1*time.Second)
-	require.Equal(t, 1, n)
+	require.Equal(t, 2, n)
 	require.True(t, timedOut)
 
 	// no OpMakeAvailable trace; shard state is initializing.
 	require.Equal(t, OpShardRegister, traces[0].Op)
-	require.Equal(t, ShardStateInitializing, traces[0].After.ShardState)
+	require.Equal(t, ShardStateNew, traces[0].After.ShardState)
+
+	require.Equal(t, OpShardInitialize, traces[1].Op)
+	require.Equal(t, ShardStateInitializing, traces[1].After.ShardState)
 
 	// corroborate we see the same through the API.
 	info, err := dagst.GetShardInfo(k)
 	require.NoError(t, err)
 	require.EqualValues(t, ShardStateInitializing, info.ShardState)
 
+	t.Log("closing")
+
 	// close the dagstore and remove the transients.
 	err = dagst.Close()
 	require.NoError(t, err)
-	// require.NoError(t, os.RemoveAll(dir))
 
 	// start a new DAGStore and do not block the fetch this time -> registration should work.
 	// create a new dagstore with the same datastore.
@@ -337,18 +341,22 @@ func TestRestartResumesRegistration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// this time we will receive two traces; OpRegister and OpMakeAvailable.
+	// this time we will receive three traces; OpShardInitialize, and OpShardMakeAvailable.
 	n, timedOut = sink.Read(traces, 1*time.Second)
-	require.Equal(t, 2, n)
+	require.Equal(t, 3, n)
 	require.True(t, timedOut)
 
 	// trace 1.
 	require.Equal(t, OpShardRegister, traces[0].Op)
-	require.Equal(t, ShardStateInitializing, traces[0].After.ShardState)
+	require.Equal(t, ShardStateNew, traces[0].After.ShardState)
 
 	// trace 2.
-	require.Equal(t, OpShardMakeAvailable, traces[1].Op)
-	require.Equal(t, ShardStateAvailable, traces[1].After.ShardState)
+	require.Equal(t, OpShardInitialize, traces[1].Op)
+	require.Equal(t, ShardStateInitializing, traces[1].After.ShardState)
+
+	// trace 3.
+	require.Equal(t, OpShardMakeAvailable, traces[2].Op)
+	require.Equal(t, ShardStateAvailable, traces[2].After.ShardState)
 
 	// ensure we have indices.
 	idx, err := dagst.indices.GetFullIndex(k)
@@ -411,6 +419,51 @@ func TestGC(t *testing.T) {
 		expect = append(expect, fmt.Sprintf("shard-%d", i))
 	}
 	require.ElementsMatch(t, expect, keys)
+}
+
+// TestLazyInitialization tests that lazy initialization initializes shards on
+// their first acquisition.
+func TestLazyInitialization(t *testing.T) {
+	dir := t.TempDir()
+	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
+	sink := tracer(128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+		Datastore:     store,
+		TraceCh:       sink,
+	})
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult, 1)
+	k := shard.KeyFromString("foo")
+	counting := &mount.Counting{Mount: carv2mnt}
+	err = dagst.RegisterShard(context.Background(), k, counting, ch, RegisterOpts{
+		LazyInitialization: true,
+	})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	info, err := dagst.GetShardInfo(k)
+	require.NoError(t, err)
+	require.Equal(t, ShardStateNew, info.ShardState)
+
+	// we haven't tried to fetch the resource.
+	require.Zero(t, counting.Count())
+
+	t.Log("now acquiring")
+
+	// do 16 simultaneous acquires.
+	acquireShard(t, dagst, k, 16)
+
+	// verify that we've fetched the shard only once.
+	require.Equal(t, 1, counting.Count())
+
+	info, err = dagst.GetShardInfo(k)
+	require.NoError(t, err)
+	require.Equal(t, ShardStateServing, info.ShardState)
+	require.EqualValues(t, 16, info.refs)
 }
 
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
@@ -524,6 +577,8 @@ func releaseAll(t *testing.T, dagst *DAGStore, k shard.Key, accs []*ShardAccesso
 func testRegistry(t *testing.T) *mount.Registry {
 	r := mount.NewRegistry()
 	err := r.Register("fs", &mount.FSMount{FS: testdata.FS})
+	require.NoError(t, err)
+	err = r.Register("counting", new(mount.Counting))
 	require.NoError(t, err)
 	return r
 }

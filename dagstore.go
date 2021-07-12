@@ -165,7 +165,13 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		return nil, fmt.Errorf("failed to restore dagstore state: %w", err)
 	}
 
-	// reset in-progress states.
+	// Reset in-progress states.
+	//
+	// Queue shards whose registration needs to be restarted. Release those
+	// ops after we spawn the control goroutine. Otherwise, having more shards
+	// in this state than the externalCh buffer size would exceed the channel
+	// buffer, and we'd block forever.
+	var register []*Shard
 	for _, s := range dagst.shards {
 		// reset to available, as we have no active acquirers at start.
 		if s.state == ShardStateServing {
@@ -181,9 +187,9 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
-				// restart the registration.
+				// reset back to new, and queue the OpShardRegister.
 				s.state = ShardStateNew
-				_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+				register = append(register, s)
 			}
 		}
 	}
@@ -197,14 +203,28 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	dagst.wg.Add(1)
 	go dagst.dispatcher()
 
+	// release the queued registrations before we return.
+	for _, s := range register {
+		_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+	}
+
 	return dagst, nil
 }
 
 type RegisterOpts struct {
-	// ExistingTransient can be supplied when registering a shard to indicate that
-	// there's already an existing local transient copy that can be used for
-	// indexing.
+	// ExistingTransient can be supplied when registering a shard to indicate
+	// that there's already an existing local transient copy that can be used
+	// for indexing.
 	ExistingTransient string
+
+	// LazyInitialization defers shard indexing to the first access instead of
+	// performing it at registration time. Use this option when fetching the
+	// asset is expensive.
+	//
+	// When true, the registration channel will fire as soon as the DAG store
+	// has acknowledged the inclusion of the shard, without waiting for any
+	// indexing to happen.
+	LazyInitialization bool
 }
 
 // RegisterShard initiates the registration of a new shard.
@@ -230,11 +250,11 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 
 	// add the shard to the shard catalogue, and drop the lock.
 	s := &Shard{
-		d:         d,
-		key:       key,
-		state:     ShardStateNew,
-		mount:     upgraded,
-		wRegister: w,
+		d:     d,
+		key:   key,
+		state: ShardStateNew,
+		mount: upgraded,
+		lazy:  opts.LazyInitialization,
 	}
 	d.shards[key] = s
 	d.lk.Unlock()

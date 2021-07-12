@@ -31,6 +31,7 @@ type Shard struct {
 	d     *DAGStore       // backreference
 	key   shard.Key       // persisted in PersistedShard.Key
 	mount *mount.Upgrader // persisted in PersistedShard.URL (underlying)
+	lazy  bool            // persisted in PersistedShard.Lazy; whether this shard has lazy indexing
 
 	// Mutable fields.
 	// Cannot read/write outside event loop.
