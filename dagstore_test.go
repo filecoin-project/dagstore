@@ -3,6 +3,7 @@ package dagstore
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -118,7 +119,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		registerShards(t, dagst, n, carv2mnt)
+		registerShards(t, dagst, n, carv2mnt, RegisterOpts{})
 	}
 
 	t.Run("1", func(t *testing.T) { run(t, 1) })
@@ -225,7 +226,7 @@ func TestRestartRestoresState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	keys := registerShards(t, dagst, 100, carv2mnt)
+	keys := registerShards(t, dagst, 100, carv2mnt, RegisterOpts{})
 	for _, k := range keys[0:20] { // acquire the first 20 keys.
 		_ = acquireShard(t, dagst, k, 4)
 	}
@@ -391,7 +392,7 @@ func TestGC(t *testing.T) {
 	// register 100 shards
 	// acquire 25 with 5 acquirers, release 2 acquirers (refcount 3); non reclaimable
 	// acquire another 25, release them all, they're reclaimable
-	shards := registerShards(t, dagst, 100, carv2mnt)
+	shards := registerShards(t, dagst, 100, carv2mnt, RegisterOpts{})
 	for _, k := range shards[0:25] {
 		accessors := acquireShard(t, dagst, k, 5)
 		for _, acc := range accessors[:2] {
@@ -466,6 +467,72 @@ func TestLazyInitialization(t *testing.T) {
 	require.EqualValues(t, 16, info.refs)
 }
 
+// TestThrottleFetch exercises and tests the fetch concurrency limitation.
+// Testing thottling on indexing is way harder...
+func TestThrottleFetch(t *testing.T) {
+	r := testRegistry(t)
+	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	sink := tracer(128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+
+		MaxConcurrentFetch: 5,
+		MaxConcurrentIndex: 5,
+	})
+	require.NoError(t, err)
+
+	// register 16 shards with lazy init, against the blocking mount.
+	// we don't register with eager, because we would block due to the throttle.
+	mnt := newBlockingMount(carv2mnt)
+	cnt := &mount.Counting{Mount: mnt}
+	resCh := make(chan ShardResult, 16)
+	for i := 0; i < 16; i++ {
+		k := shard.KeyFromString(strconv.Itoa(i))
+		err := dagst.RegisterShard(context.Background(), k, cnt, resCh, RegisterOpts{})
+		require.NoError(t, err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 16)
+	for _, i := range info {
+		require.Equal(t, ShardStateInitializing, i.ShardState)
+	}
+
+	// no responses received.
+	require.Len(t, resCh, 0)
+
+	// mount was called 5 times only.
+	require.EqualValues(t, 5, cnt.Count())
+
+	// allow 5 to proceed; those will be initialized an the next 5 will block.
+	mnt.UnblockNext(5)
+	time.Sleep(500 * time.Millisecond)
+
+	// five responses received.
+	require.Len(t, resCh, 5)
+
+	// mount was called another 5 times.
+	require.EqualValues(t, 10, cnt.Count())
+
+	info = dagst.AllShardsInfo()
+	require.Len(t, info, 16)
+
+	m := map[ShardState][]shard.Key{}
+	for k, i := range info {
+		m[i.ShardState] = append(m[i.ShardState], k)
+	}
+	require.Len(t, m, 2) // only two shard states.
+	require.Len(t, m[ShardStateInitializing], 16-5)
+	require.Len(t, m[ShardStateAvailable], 5)
+}
+
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {
@@ -473,13 +540,13 @@ func TestBlockCallback(t *testing.T) {
 }
 
 // registerShards registers n shards concurrently, using the CARv2 mount.
-func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount) (ret []shard.Key) {
+func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
 	grp, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < n; i++ {
 		k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
 		grp.Go(func() error {
 			ch := make(chan ShardResult, 1)
-			err := dagst.RegisterShard(context.Background(), k, mnt, ch, RegisterOpts{})
+			err := dagst.RegisterShard(context.Background(), k, mnt, ch, opts)
 			if err != nil {
 				return err
 			}
@@ -494,11 +561,17 @@ func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount) (ret 
 	info := dagst.AllShardsInfo()
 	require.Len(t, info, n)
 	for k, ss := range info {
-		require.Equal(t, ShardStateAvailable, ss.ShardState)
-		require.NoError(t, ss.Error)
-		istat, err := dagst.indices.StatFullIndex(k)
-		require.NoError(t, err)
-		require.True(t, istat.Exists)
+		if opts.LazyInitialization {
+			require.Equal(t, ShardStateNew, ss.ShardState)
+			require.NoError(t, ss.Error)
+		} else {
+			require.Equal(t, ShardStateAvailable, ss.ShardState)
+			require.NoError(t, ss.Error)
+
+			istat, err := dagst.indices.StatFullIndex(k)
+			require.NoError(t, err)
+			require.True(t, istat.Exists)
+		}
 	}
 
 	return ret

@@ -5,6 +5,7 @@ import (
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/ipld/go-car/v2"
+	"github.com/ipld/go-car/v2/index"
 )
 
 //
@@ -16,7 +17,14 @@ import (
 // joining them to form a ShardAccessor.
 func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
 	k := s.key
-	reader, err := mnt.Fetch(ctx)
+
+	var reader mount.Reader
+	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
+		var err error
+		reader, err = mnt.Fetch(ctx)
+		return err
+	})
+
 	if err != nil {
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
@@ -29,7 +37,12 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		return
 	}
 
-	idx, err := d.indices.GetFullIndex(k)
+	var idx index.Index
+	err = d.throttleIndex.Do(ctx, func(ctx context.Context) error {
+		var err error
+		idx, err = d.indices.GetFullIndex(k)
+		return err
+	})
 	if err != nil {
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
@@ -55,7 +68,13 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 // indexShard initializes a shard asynchronously by fetching its data and
 // performing indexing.
 func (d *DAGStore) indexShard(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
-	reader, err := mnt.Fetch(ctx)
+	var reader mount.Reader
+	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
+		var err error
+		reader, err = mnt.Fetch(ctx)
+		return err
+	})
+
 	if err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
 		return

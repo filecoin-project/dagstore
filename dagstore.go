@@ -63,6 +63,9 @@ type DAGStore struct {
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
 	traceCh  chan<- Trace
+
+	throttleFetch Throttler
+	throttleIndex Throttler
 }
 
 type dispatch struct {
@@ -103,6 +106,14 @@ type Config struct {
 	// shard operation. Publishing to this channel blocks the event loop, so the
 	// caller must ensure the channel is serviced appropriately.
 	TraceCh chan<- Trace
+
+	// MaxConcurrentIndex is the maximum indexing jobs that can
+	// run concurrently. 0 (default) disables throttling.
+	MaxConcurrentIndex int
+
+	// MaxConcurrentFetch is the maximum fetching jobs that can
+	// run concurrently. 0 (default) disables throttling.
+	MaxConcurrentFetch int
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -146,18 +157,28 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dagst := &DAGStore{
-		mounts:       cfg.MountRegistry,
-		config:       cfg,
-		indices:      indices,
-		shards:       make(map[shard.Key]*Shard),
-		store:        cfg.Datastore,
-		externalCh:   make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
-		internalCh:   make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
-		completionCh: make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
-		dispatchCh:   make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
-		ctx:          ctx,
-		cancelFn:     cancel,
-		traceCh:      cfg.TraceCh,
+		mounts:        cfg.MountRegistry,
+		config:        cfg,
+		indices:       indices,
+		shards:        make(map[shard.Key]*Shard),
+		store:         cfg.Datastore,
+		externalCh:    make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
+		internalCh:    make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
+		completionCh:  make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
+		dispatchCh:    make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
+		ctx:           ctx,
+		cancelFn:      cancel,
+		traceCh:       cfg.TraceCh,
+		throttleFetch: noopThrottler{},
+		throttleIndex: noopThrottler{},
+	}
+
+	if max := cfg.MaxConcurrentFetch; max > 0 {
+		dagst.throttleFetch = NewThrottler(max)
+	}
+
+	if max := cfg.MaxConcurrentIndex; max > 0 {
+		dagst.throttleIndex = NewThrottler(max)
 	}
 
 	if err := dagst.restoreState(); err != nil {
@@ -286,7 +307,7 @@ type AcquireOpts struct {
 // ShardAccessor, an object that enables various patterns of access to the data
 // contained within the shard.
 //
-// This operation may resolve near-instantaneosly if the shard is available
+// This operation may resolve near-instantaneously if the shard is available
 // locally. If not, the shard data may be fetched from its mount.
 //
 // This method returns an error synchronously if preliminary validation fails.
