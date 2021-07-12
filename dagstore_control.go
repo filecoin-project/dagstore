@@ -42,7 +42,8 @@ func (d *DAGStore) control() {
 
 		// wFailure is a synthetic failure waiter that uses the DAGStore's
 		// global context and the failure channel. Only safe to actually use if
-		// d.failureCh != nil.
+		// d.failureCh != nil. wFailure is used to dispatch failure
+		// notifications to the application.
 		wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
 	)
 
