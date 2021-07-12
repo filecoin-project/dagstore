@@ -65,9 +65,9 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	d.dispatchResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 
-// indexShard initializes a shard asynchronously by fetching its data and
+// initializeShard initializes a shard asynchronously by fetching its data and
 // performing indexing.
-func (d *DAGStore) indexShard(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
+func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Mount) {
 	var reader mount.Reader
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -97,5 +97,5 @@ func (d *DAGStore) indexShard(ctx context.Context, w *waiter, s *Shard, mnt moun
 		return
 	}
 
-	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s, waiter: w}, d.completionCh)
+	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
 }

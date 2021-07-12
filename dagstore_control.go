@@ -90,18 +90,27 @@ func (d *DAGStore) control() {
 				break
 			}
 
-			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
+			go d.initializeShard(tsk.ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
 			// can arrive here after initializing a new shard,
 			// or when recovering from a failure.
 
 			s.state = ShardStateAvailable
+			s.err = nil // nillify past errors
 
+			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {
 				res := &ShardResult{Key: s.key}
 				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
+			}
+
+			// notify the recovery waiter, if there is one.
+			if s.wRecover != nil {
+				res := &ShardResult{Key: s.key}
+				d.dispatchResult(res, s.wRecover)
+				s.wRecover = nil
 			}
 
 			// trigger queued acquisition waiters.
@@ -111,7 +120,7 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
-				go d.acquireAsync(tsk.ctx, w, s, s.mount)
+				go d.acquireAsync(w.ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
@@ -134,10 +143,10 @@ func (d *DAGStore) control() {
 				// if the shard was registered with lazy init, and this is the
 				// first acquire, queue the initialization.
 				if s.state == ShardStateNew {
-					// Use the background context. We can't use the acquirer's
-					// context because there can be multiple concurrent
-					// acquirers, and if the first one cancels, the entire job
-					// would be cancelled.
+					// Override the context with the background context.
+					// We can't use the acquirer's context for initialization
+					// because there can be multiple concurrent acquirers, and
+					// if the first one cancels, the entire job would be cancelled.
 					w := *tsk.waiter
 					w.ctx = context.Background()
 					_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: &w}, d.internalCh)
@@ -174,7 +183,7 @@ func (d *DAGStore) control() {
 			s.state = ShardStateErrored
 			s.err = tsk.err
 
-			// can't block the event loop, so launch a goroutine to notify.
+			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {
 				res := &ShardResult{
 					Key:   s.key,
@@ -182,6 +191,16 @@ func (d *DAGStore) control() {
 				}
 				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
+			}
+
+			// notify the recovery waiter, if there is one.
+			if s.wRecover != nil {
+				res := &ShardResult{
+					Key:   s.key,
+					Error: fmt.Errorf("failed to recover shard: %w", tsk.err),
+				}
+				d.dispatchResult(res, s.wRecover)
+				s.wRecover = nil
 			}
 
 			// fail waiting acquirers.
@@ -212,6 +231,40 @@ func (d *DAGStore) control() {
 				d.dispatchFailuresCh <- &dispatch{res: res, w: wFailure}
 			}
 
+		case OpShardRecover:
+			if s.state != ShardStateErrored {
+				err := fmt.Errorf("refused to recover shard in state other than errored; current state: %d", s.state)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.dispatchResult(res, tsk.waiter)
+				break
+			}
+
+			// set the state to recovering.
+			s.state = ShardStateRecovering
+
+			// park the waiter; there can never be more than one because
+			// subsequent calls to recover the same shard will be rejected
+			// because the state is no longer ShardStateErrored.
+			s.wRecover = tsk.waiter
+
+			// attempt to delete the transient first; this can happen if the
+			// transient has been removed by hand. DeleteTransient resets the
+			// transient to "" always.
+			if err := s.mount.DeleteTransient(); err != nil {
+				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
+			}
+
+			// attempt to drop the index.
+			dropped, err := d.indices.DropFullIndex(s.key)
+			if err != nil {
+				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
+			} else if !dropped {
+				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
+			}
+
+			// fetch again and reindex.
+			go d.initializeShard(tsk.ctx, s, s.mount)
+
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
@@ -234,35 +287,6 @@ func (d *DAGStore) control() {
 			}
 			res := &ShardResult{Key: s.key, Error: err}
 			d.dispatchResult(res, tsk.waiter)
-
-		case OpShardRecover:
-			if s.state != ShardStateErrored {
-				err := fmt.Errorf("refused to recover shard in state other than errored; current state: %d", s.state)
-				res := &ShardResult{Key: s.key, Error: err}
-				d.dispatchResult(res, tsk.waiter)
-				break
-			}
-
-			// set the state to recovering.
-			s.state = ShardStateRecovering
-
-			// attempt to delete the transient first; this can happen if the
-			// transient has been removed by hand. DeleteTransient resets the
-			// transient to "" always.
-			if err := s.mount.DeleteTransient(); err != nil {
-				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
-			}
-
-			// attempt to drop the index.
-			dropped, err := d.indices.DropFullIndex(s.key)
-			if err != nil {
-				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
-			} else if !dropped {
-				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
-			}
-
-			// fetch again and reindex.
-			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))

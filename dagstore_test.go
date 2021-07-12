@@ -18,7 +18,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var carv2mnt = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
+var (
+	carv2mnt = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
+	junkmnt  = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathJunk}
+)
 
 func init() {
 	_ = logging.SetLogLevel("dagstore", "DEBUG")
@@ -531,6 +534,187 @@ func TestThrottleFetch(t *testing.T) {
 	require.Len(t, m, 2) // only two shard states.
 	require.Len(t, m[ShardStateInitializing], 16-5)
 	require.Len(t, m[ShardStateAvailable], 5)
+}
+
+func TestIndexingFailure(t *testing.T) {
+	r := testRegistry(t)
+	dir := t.TempDir()
+	sink := tracer(128)
+	failures := make(chan ShardResult, 128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+		FailureCh:     failures,
+	})
+	require.NoError(t, err)
+
+	// register 16 shards with junk in them, so they will fail indexing.
+	resCh := make(chan ShardResult, 16)
+	junkmnt := *junkmnt // take a copy
+	for i := 0; i < 16; i++ {
+		k := shard.KeyFromString(strconv.Itoa(i))
+		err := dagst.RegisterShard(context.Background(), k, &junkmnt, resCh, RegisterOpts{})
+		require.NoError(t, err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// 16 failures were notified.
+	require.Len(t, failures, 16)
+	for i := 0; i < 16; i++ {
+		f := <-failures
+		require.Error(t, f.Error)
+
+		res := <-resCh
+		require.Error(t, res.Error)
+	}
+
+	info := dagst.AllShardsInfo()
+	for _, i := range info {
+		require.Equal(t, ShardStateErrored, i.ShardState)
+		require.Error(t, i.Error)
+	}
+
+	evts := make([]Trace, 48)
+	n, timedOut := sink.Read(evts, 50*time.Millisecond)
+	require.False(t, timedOut)
+	require.Equal(t, 48, n)
+
+	// first 48 events are OpShardRegister, OpShardInitialize, OpShardFail.
+	for i := 0; i < 48; i++ {
+		evt := evts[i]
+		switch evt.Op {
+		case OpShardRegister:
+			require.EqualValues(t, ShardStateNew, evt.After.ShardState)
+			require.NoError(t, evt.After.Error)
+		case OpShardInitialize:
+			require.EqualValues(t, ShardStateInitializing, evt.After.ShardState)
+			require.NoError(t, evt.After.Error)
+		case OpShardFail:
+			require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
+			require.Error(t, evt.After.Error)
+		default:
+			require.Fail(t, "unexpected op: %s", evt.Op)
+		}
+	}
+
+	t.Run("fails again", func(t *testing.T) {
+		// continue using a bad path.
+		junkmnt.Path = testdata.FSPathJunk
+
+		// try to recover, it will fail again.
+		for i := 0; i < 16; i++ {
+			k := shard.KeyFromString(strconv.Itoa(i))
+			err := dagst.RecoverShard(context.Background(), k, resCh, RecoverOpts{})
+			require.NoError(t, err)
+		}
+
+		time.Sleep(500 * time.Millisecond)
+
+		// 16 failures were notified.
+		require.Len(t, failures, 16)
+		for i := 0; i < 16; i++ {
+			f := <-failures
+			require.Error(t, f.Error)
+
+			res := <-resCh
+			require.Error(t, res.Error)
+		}
+
+		info := dagst.AllShardsInfo()
+		for k, i := range info {
+			require.Equal(t, ShardStateErrored, i.ShardState)
+			require.Error(t, i.Error)
+
+			// no index
+			istat, err := dagst.indices.StatFullIndex(k)
+			require.NoError(t, err)
+			require.False(t, istat.Exists)
+		}
+
+		evts := make([]Trace, 32)
+		n, timedOut := sink.Read(evts, 50*time.Millisecond)
+		require.False(t, timedOut)
+		require.Equal(t, 32, n)
+
+		// these 32 traces are OpShardRecover, OpShardFail.
+		for i := 0; i < 32; i++ {
+			evt := evts[i]
+			switch evt.Op {
+			case OpShardRecover:
+				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
+			case OpShardFail:
+				require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
+			default:
+				require.Fail(t, "unexpected op: %s", evt.Op)
+			}
+		}
+
+	})
+
+	t.Run("recovers", func(t *testing.T) {
+		// use a good path.
+		junkmnt.Path = testdata.FSPathCarV2
+
+		// try to recover, it will succeed.
+		for i := 0; i < 16; i++ {
+			k := shard.KeyFromString(strconv.Itoa(i))
+			err := dagst.RecoverShard(context.Background(), k, resCh, RecoverOpts{})
+			require.NoError(t, err)
+		}
+
+		// no need to wait, since the recovery channel will fire when the shard
+		// is actually recovered.
+		// time.Sleep(500 * time.Millisecond)
+
+		// 0 failures were notified.
+		require.Len(t, failures, 0)
+
+		for i := 0; i < 16; i++ {
+			res := <-resCh
+			require.NoError(t, res.Error)
+		}
+
+		info := dagst.AllShardsInfo()
+		for k, i := range info {
+			require.Equal(t, ShardStateAvailable, i.ShardState)
+			require.NoError(t, i.Error)
+
+			// an index exists!
+			istat, err := dagst.indices.StatFullIndex(k)
+			require.NoError(t, err)
+			require.True(t, istat.Exists)
+		}
+
+		evts := make([]Trace, 32)
+		n, timedOut := sink.Read(evts, 50*time.Millisecond)
+		require.False(t, timedOut)
+		require.Equal(t, 32, n)
+
+		// these 32 traces are OpShardRecover, OpShardFail.
+		for i := 0; i < 32; i++ {
+			evt := evts[i]
+			switch evt.Op {
+			case OpShardRecover:
+				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
+			case OpShardMakeAvailable:
+				require.EqualValues(t, ShardStateAvailable, evt.After.ShardState)
+				require.NoError(t, evt.After.Error)
+			default:
+				require.Fail(t, "unexpected op: %s", evt.Op)
+			}
+		}
+
+	})
+
+}
+
+func TestIndexingFailure_Recovers(t *testing.T) {
+
 }
 
 // TestBlockCallback tests that blocking a callback blocks the dispatcher

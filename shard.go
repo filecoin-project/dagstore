@@ -40,6 +40,7 @@ type Shard struct {
 
 	// Waiters.
 	wRegister *waiter   // waiter for registration result.
+	wRecover  *waiter   // waiter for recovering an errored shard.
 	wAcquire  []*waiter // waiters for acquiring the shard.
 	wDestroy  *waiter   // waiter for shard destruction.
 

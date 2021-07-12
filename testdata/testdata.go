@@ -12,9 +12,11 @@ import (
 const (
 	FSPathCarV1 = "files/sample-v1.car"
 	FSPathCarV2 = "files/sample-wrapped-v2.car"
+	FSPathJunk  = "files/junk.dat"
 
 	RootPathCarV1 = "testdata/files/sample-v1.car"
 	RootPathCarV2 = "testdata/files/sample-wrapped-v2.car"
+	RootPathJunk  = "testdata/files/funk.dat"
 )
 
 var (
@@ -23,6 +25,7 @@ var (
 
 	CarV1 []byte
 	CarV2 []byte
+	Junk  []byte
 
 	// RootCID is the root CID of the carv2 for testing.
 	RootCID cid.Cid
@@ -36,6 +39,11 @@ func init() {
 	}
 
 	CarV2, err = FS.ReadFile(FSPathCarV2)
+	if err != nil {
+		panic(err)
+	}
+
+	Junk, err = FS.ReadFile(FSPathJunk)
 	if err != nil {
 		panic(err)
 	}
