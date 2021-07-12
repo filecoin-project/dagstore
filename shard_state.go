@@ -27,3 +27,13 @@ const (
 	// of the shard. This state is currently unused, but it's reserved.
 	ShardStateUnknown ShardState = 0xff
 )
+
+func (ss ShardState) String() string {
+	return [...]string{
+		"ShardStateNew",
+		"ShardStateInitializing",
+		"ShardStateAvailable",
+		"ShardStateServing",
+		"ShardStateErrored",
+		"ShardStateUnknown"}[ss]
+}
