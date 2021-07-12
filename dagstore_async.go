@@ -68,7 +68,13 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 // indexShard initializes a shard asynchronously by fetching its data and
 // performing indexing.
 func (d *DAGStore) indexShard(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
-	reader, err := mnt.Fetch(ctx)
+	var reader mount.Reader
+	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
+		var err error
+		reader, err = mnt.Fetch(ctx)
+		return err
+	})
+
 	if err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount: %w", err)
 		return

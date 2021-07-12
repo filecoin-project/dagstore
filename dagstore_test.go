@@ -489,10 +489,11 @@ func TestThrottleFetch(t *testing.T) {
 	// register 16 shards with lazy init, against the blocking mount.
 	// we don't register with eager, because we would block due to the throttle.
 	mnt := newBlockingMount(carv2mnt)
+	cnt := &mount.Counting{Mount: mnt}
 	resCh := make(chan ShardResult, 16)
 	for i := 0; i < 16; i++ {
 		k := shard.KeyFromString(strconv.Itoa(i))
-		err := dagst.RegisterShard(context.Background(), k, mnt, resCh, RegisterOpts{})
+		err := dagst.RegisterShard(context.Background(), k, cnt, resCh, RegisterOpts{})
 		require.NoError(t, err)
 	}
 
@@ -507,12 +508,18 @@ func TestThrottleFetch(t *testing.T) {
 	// no responses received.
 	require.Len(t, resCh, 0)
 
+	// mount was called 5 times only.
+	require.EqualValues(t, 5, cnt.Count())
+
 	// allow 5 to proceed; those will be initialized an the next 5 will block.
 	mnt.UnblockNext(5)
 	time.Sleep(500 * time.Millisecond)
 
 	// five responses received.
 	require.Len(t, resCh, 5)
+
+	// mount was called another 5 times.
+	require.EqualValues(t, 10, cnt.Count())
 
 	info = dagst.AllShardsInfo()
 	require.Len(t, info, 16)
