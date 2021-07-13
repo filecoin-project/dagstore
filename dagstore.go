@@ -50,22 +50,41 @@ type DAGStore struct {
 	indices index.FullIndexRepo
 	store   ds.Datastore
 
+	// Channels owned by us.
+	//
 	// externalCh receives external tasks.
 	externalCh chan *task
 	// internalCh receives internal tasks to the event loop.
 	internalCh chan *task
 	// completionCh receives tasks queued up as a result of async completions.
 	completionCh chan *task
-	// dispatchCh is serviced by the dispatcher goroutine.
-	dispatchCh chan *dispatch
+	// dispatchResultsCh is a buffered channel for dispatching results back to
+	// the application. Serviced by a dispatcher goroutine.
+	// Note: This pattern decouples the event loop from the application, so a
+	// failure to consume immediately won't block the event loop.
+	dispatchResultsCh chan *dispatch
+	// dispatchFailuresCh is a buffered channel for dispatching shard failures
+	// back to the application. Serviced by a dispatcher goroutine.
+	// See note in dispatchResultsCh for background.
+	dispatchFailuresCh chan *dispatch
 
+	// Channels not owned by us.
+	//
+	// traceCh is where traces on shard operations will be sent, if non-nil.
+	traceCh chan<- Trace
+	// failureCh is where shard failures will be notified, if non-nil.
+	failureCh chan<- ShardResult
+
+	// Throttling.
+	//
+	throttleFetch Throttler
+	throttleIndex Throttler
+
+	// Lifecycle.
+	//
 	ctx      context.Context
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
-	traceCh  chan<- Trace
-
-	throttleFetch Throttler
-	throttleIndex Throttler
 }
 
 type dispatch struct {
@@ -106,6 +125,12 @@ type Config struct {
 	// shard operation. Publishing to this channel blocks the event loop, so the
 	// caller must ensure the channel is serviced appropriately.
 	TraceCh chan<- Trace
+
+	// FailureCh is a channel to be notified every time that a shard moves to
+	// ShardStateErrored. A nil value will send no failure notifications.
+	// Failure events can be used to evaluate the error and call
+	// DAGStore.RecoverShard if deemed recoverable.
+	FailureCh chan<- ShardResult
 
 	// MaxConcurrentIndex is the maximum indexing jobs that can
 	// run concurrently. 0 (default) disables throttling.
@@ -157,20 +182,21 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dagst := &DAGStore{
-		mounts:        cfg.MountRegistry,
-		config:        cfg,
-		indices:       indices,
-		shards:        make(map[shard.Key]*Shard),
-		store:         cfg.Datastore,
-		externalCh:    make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
-		internalCh:    make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
-		completionCh:  make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
-		dispatchCh:    make(chan *dispatch, 128), // len=128, same as externalCh (input channel).
-		ctx:           ctx,
-		cancelFn:      cancel,
-		traceCh:       cfg.TraceCh,
-		throttleFetch: noopThrottler{},
-		throttleIndex: noopThrottler{},
+		mounts:            cfg.MountRegistry,
+		config:            cfg,
+		indices:           indices,
+		shards:            make(map[shard.Key]*Shard),
+		store:             cfg.Datastore,
+		externalCh:        make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
+		internalCh:        make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
+		completionCh:      make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
+		dispatchResultsCh: make(chan *dispatch, 128), // len=128, same as externalCh.
+		traceCh:           cfg.TraceCh,
+		failureCh:         cfg.FailureCh,
+		throttleFetch:     noopThrottler{},
+		throttleIndex:     noopThrottler{},
+		ctx:               ctx,
+		cancelFn:          cancel,
 	}
 
 	if max := cfg.MaxConcurrentFetch; max > 0 {
@@ -219,10 +245,17 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	dagst.wg.Add(1)
 	go dagst.control()
 
-	// spawn the dispatcher goroutine, responsible for pumping async results
-	// back to the caller.
+	// spawn the dispatcher goroutine for responses, responsible for pumping
+	// async results back to the caller.
 	dagst.wg.Add(1)
-	go dagst.dispatcher()
+	go dagst.dispatcher(dagst.dispatchResultsCh)
+
+	// application has provided a failure channel; spawn the dispatcher.
+	if dagst.failureCh != nil {
+		dagst.dispatchFailuresCh = make(chan *dispatch, 128) // len=128, same as externalCh.
+		dagst.wg.Add(1)
+		go dagst.dispatcher(dagst.dispatchFailuresCh)
+	}
 
 	// release the queued registrations before we return.
 	for _, s := range register {
@@ -323,6 +356,35 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	d.lk.Unlock()
 
 	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	return d.queueTask(tsk, d.externalCh)
+}
+
+type RecoverOpts struct {
+}
+
+// RecoverShard recovers a shard in ShardStateErrored state.
+//
+// If the shard referenced by the key doesn't exist, an error is returned
+// immediately and no result is delivered on the supplied channel.
+//
+// If the shard is not in the ShardStateErrored state, the operation is accepted
+// but an error will be returned quickly on the supplied channel.
+//
+// Otherwise, the recovery operation will be queued and the supplied channel
+// will be notified when it completes.
+//
+// TODO add an operation identifier to ShardResult -- starts to look like
+//  a Trace event?
+func (d *DAGStore) RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error {
+	d.lk.Lock()
+	s, ok := d.shards[key]
+	if !ok {
+		d.lk.Unlock()
+		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
+	}
+	d.lk.Unlock()
+
+	tsk := &task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -480,7 +542,6 @@ func ensureDir(path string) error {
 // suitable for usage both outside and inside the event loop, depending on the
 // channel passed.
 func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
-	// TODO failShard will fire the failure notification to the application soon.
 	err := fmt.Errorf(format, args...)
 	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
 }

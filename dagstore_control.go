@@ -16,6 +16,7 @@ const (
 	OpShardFail
 	OpShardRelease
 	OpShardGC
+	OpShardRecover
 )
 
 func (o OpType) String() string {
@@ -27,7 +28,8 @@ func (o OpType) String() string {
 		"OpShardAcquire",
 		"OpShardFail",
 		"OpShardRelease",
-		"OpShardGC"}[o]
+		"OpShardGC",
+		"OpShardRecover"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -35,8 +37,15 @@ func (d *DAGStore) control() {
 	defer d.wg.Done()
 
 	var (
-		tsk *task
-		err error
+		tsk       *task
+		prevState ShardState
+		err       error
+
+		// wFailure is a synthetic failure waiter that uses the DAGStore's
+		// global context and the failure channel. Only safe to actually use if
+		// d.failureCh != nil. wFailure is used to dispatch failure
+		// notifications to the application.
+		wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
 	)
 
 	for {
@@ -49,6 +58,8 @@ func (d *DAGStore) control() {
 
 		s := tsk.shard
 		s.lk.Lock()
+
+		prevState = s.state
 
 		switch tsk.op {
 		case OpShardRegister:
@@ -65,7 +76,7 @@ func (d *DAGStore) control() {
 				// waiter will be nil if this was a restart and not a call to Register() call.
 				if tsk.waiter != nil {
 					res := &ShardResult{Key: s.key}
-					d.sendResult(res, tsk.waiter)
+					d.dispatchResult(res, tsk.waiter)
 				}
 				break
 			}
@@ -83,15 +94,27 @@ func (d *DAGStore) control() {
 				break
 			}
 
-			go d.indexShard(tsk.ctx, tsk.waiter, s, s.mount)
+			go d.initializeShard(tsk.ctx, s, s.mount)
 
 		case OpShardMakeAvailable:
-			s.state = ShardStateAvailable
+			// can arrive here after initializing a new shard,
+			// or when recovering from a failure.
 
+			s.state = ShardStateAvailable
+			s.err = nil // nillify past errors
+
+			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {
 				res := &ShardResult{Key: s.key}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
+			}
+
+			// notify the recovery waiter, if there is one.
+			if s.wRecover != nil {
+				res := &ShardResult{Key: s.key}
+				d.dispatchResult(res, s.wRecover)
+				s.wRecover = nil
 			}
 
 			// trigger queued acquisition waiters.
@@ -101,7 +124,7 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
-				go d.acquireAsync(tsk.ctx, w, s, s.mount)
+				go d.acquireAsync(w.ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
@@ -109,11 +132,11 @@ func (d *DAGStore) control() {
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
-			// TODO requires test
+			// TODO needs test
 			if s.state == ShardStateErrored {
 				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				break
 			}
 
@@ -124,10 +147,10 @@ func (d *DAGStore) control() {
 				// if the shard was registered with lazy init, and this is the
 				// first acquire, queue the initialization.
 				if s.state == ShardStateNew {
-					// Use the background context. We can't use the acquirer's
-					// context because there can be multiple concurrent
-					// acquirers, and if the first one cancels, the entire job
-					// would be cancelled.
+					// Override the context with the background context.
+					// We can't use the acquirer's context for initialization
+					// because there can be multiple concurrent acquirers, and
+					// if the first one cancels, the entire job would be cancelled.
 					w := *tsk.waiter
 					w.ctx = context.Background()
 					_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: &w}, d.internalCh)
@@ -164,14 +187,24 @@ func (d *DAGStore) control() {
 			s.state = ShardStateErrored
 			s.err = tsk.err
 
-			// can't block the event loop, so launch a goroutine to notify.
+			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {
 				res := &ShardResult{
 					Key:   s.key,
 					Error: fmt.Errorf("failed to register shard: %w", tsk.err),
 				}
-				d.sendResult(res, s.wRegister)
+				d.dispatchResult(res, s.wRegister)
 				s.wRegister = nil
+			}
+
+			// notify the recovery waiter, if there is one.
+			if s.wRecover != nil {
+				res := &ShardResult{
+					Key:   s.key,
+					Error: fmt.Errorf("failed to recover shard: %w", tsk.err),
+				}
+				d.dispatchResult(res, s.wRecover)
+				s.wRecover = nil
 			}
 
 			// fail waiting acquirers.
@@ -179,7 +212,7 @@ func (d *DAGStore) control() {
 			if len(s.wAcquire) > 0 {
 				err := fmt.Errorf("failed to acquire shard: %w", tsk.err)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, s.wAcquire...)
+				d.dispatchResult(res, s.wAcquire...)
 				s.wAcquire = s.wAcquire[:0] // clear acquirers.
 			}
 
@@ -196,13 +229,51 @@ func (d *DAGStore) control() {
 			// references will be released, setting the shard in an errored
 			// state with zero refcount.
 
-			// TODO notify application.
+			// Notify the application of the failure, if they provided a channel.
+			if ch := d.failureCh; ch != nil {
+				res := &ShardResult{Key: s.key, Error: s.err}
+				d.dispatchFailuresCh <- &dispatch{res: res, w: wFailure}
+			}
+
+		case OpShardRecover:
+			if s.state != ShardStateErrored {
+				err := fmt.Errorf("refused to recover shard in state other than errored; current state: %d", s.state)
+				res := &ShardResult{Key: s.key, Error: err}
+				d.dispatchResult(res, tsk.waiter)
+				break
+			}
+
+			// set the state to recovering.
+			s.state = ShardStateRecovering
+
+			// park the waiter; there can never be more than one because
+			// subsequent calls to recover the same shard will be rejected
+			// because the state is no longer ShardStateErrored.
+			s.wRecover = tsk.waiter
+
+			// attempt to delete the transient first; this can happen if the
+			// transient has been removed by hand. DeleteTransient resets the
+			// transient to "" always.
+			if err := s.mount.DeleteTransient(); err != nil {
+				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
+			}
+
+			// attempt to drop the index.
+			dropped, err := d.indices.DropFullIndex(s.key)
+			if err != nil {
+				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
+			} else if !dropped {
+				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
+			}
+
+			// fetch again and reindex.
+			go d.initializeShard(tsk.ctx, s, s.mount)
 
 		case OpShardDestroy:
 			if s.state == ShardStateServing || s.refs > 0 {
 				err := fmt.Errorf("failed to destroy shard; active references: %d", s.refs)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.sendResult(res, tsk.waiter)
+				d.dispatchResult(res, tsk.waiter)
 				break
 			}
 
@@ -219,7 +290,11 @@ func (d *DAGStore) control() {
 				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
 			}
 			res := &ShardResult{Key: s.key, Error: err}
-			d.sendResult(res, tsk.waiter)
+			d.dispatchResult(res, tsk.waiter)
+
+		default:
+			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
+
 		}
 
 		// persist the current shard state.
@@ -240,6 +315,8 @@ func (d *DAGStore) control() {
 			}
 			d.traceCh <- n
 		}
+
+		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
 
 		s.lk.Unlock()
 	}
