@@ -7,6 +7,7 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
 	carindex "github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multicodec"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -48,7 +49,8 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 	k := shard.KeyFromString("shard-key-1")
 
 	// make an index
-	idx := carindex.BuildersByCodec[carindex.IndexSorted]()
+	idx, err := carindex.New(multicodec.CarIndexSorted)
+	require.NoError(t, err)
 	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
 	require.NoError(t, err)
 

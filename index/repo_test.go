@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	carindex "github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multicodec"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/dagstore/shard"
@@ -29,7 +30,8 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	k := shard.KeyFromString("shard-key-1")
 
 	// make an index
-	idx := carindex.BuildersByCodec[carindex.IndexSorted]()
+	idx, err := carindex.New(multicodec.CarIndexSorted)
+	require.NoError(t, err)
 	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
 	require.NoError(t, err)
 
