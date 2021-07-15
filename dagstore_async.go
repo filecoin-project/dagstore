@@ -37,12 +37,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		return
 	}
 
-	var idx index.Index
-	err = d.throttleIndex.Do(ctx, func(ctx context.Context) error {
-		var err error
-		idx, err = d.indices.GetFullIndex(k)
-		return err
-	})
+	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
@@ -82,12 +77,12 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	defer reader.Close()
 
 	// works for both CARv1 and CARv2.
-	// TODO avoid using this API since it's too opaque; if an inline index
-	//  exists, this API returns quickly, if not, an index will be generated
-	//  which is a costly operation in terms of IO and wall clock time. The DAG
-	//  store will need to have control over scheduling of index generation.
-	//  https://github.com/filecoin-project/dagstore/issues/50
-	idx, err := car.ReadOrGenerateIndex(reader)
+	var idx index.Index
+	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
+		var err error
+		idx, err = car.ReadOrGenerateIndex(reader)
+		return err
+	})
 	if err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to read/generate CAR Index: %w", err)
 		return
