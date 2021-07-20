@@ -70,7 +70,7 @@ func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 	}
 	sa.lk.Unlock()
 
-	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true))
+	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true), blockstore.UseWholeCIDs(true))
 	return bs, err
 }
 
