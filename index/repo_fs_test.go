@@ -51,7 +51,7 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 	// make an index
 	idx, err := carindex.New(multicodec.CarIndexSorted)
 	require.NoError(t, err)
-	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
+	err = idx.Load([]carindex.Record{{Cid: cid1, Offset: offset1}})
 	require.NoError(t, err)
 
 	// Create a repo at the base path
@@ -70,7 +70,7 @@ func TestFSRepoLoadFromDisk(t *testing.T) {
 	fidx, err := repo2.GetFullIndex(k)
 	require.NoError(t, err)
 
-	offset, err := fidx.Get(cid1)
+	offset, err := carindex.GetFirst(fidx, cid1)
 	require.NoError(t, err)
 	require.Equal(t, offset1, offset)
 }

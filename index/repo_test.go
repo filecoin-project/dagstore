@@ -32,7 +32,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	// make an index
 	idx, err := carindex.New(multicodec.CarIndexSorted)
 	require.NoError(t, err)
-	err = idx.Load([]carindex.Record{{Cid: cid1, Idx: offset1}})
+	err = idx.Load([]carindex.Record{{Cid: cid1, Offset: offset1}})
 	require.NoError(t, err)
 
 	// Verify that an empty repo has zero size
@@ -87,7 +87,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 	fidx, err := r.GetFullIndex(k)
 	require.NoError(t, err)
 
-	offset, err := fidx.Get(cid1)
+	offset, err := carindex.GetFirst(fidx, cid1)
 	require.NoError(t, err)
 	require.Equal(t, offset1, offset)
 
