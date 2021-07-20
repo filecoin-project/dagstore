@@ -8,10 +8,13 @@ import (
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
+
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
+	carv2 "github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/blockstore"
 	"github.com/ipld/go-car/v2/index"
+
 	"golang.org/x/exp/mmap"
 )
 
@@ -67,7 +70,7 @@ func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 	}
 	sa.lk.Unlock()
 
-	bs, err := blockstore.NewReadOnly(r, sa.idx)
+	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF)
 	return bs, err
 }
 
