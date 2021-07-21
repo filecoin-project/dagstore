@@ -132,11 +132,10 @@ func (d *DAGStore) control() {
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
-			// TODO needs test
 			if s.state == ShardStateErrored {
 				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
 				res := &ShardResult{Key: s.key, Error: err}
-				d.dispatchResult(res, s.wRegister)
+				d.dispatchResult(res, w)
 				break
 			}
 
