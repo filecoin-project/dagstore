@@ -8,7 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	logging "github.com/ipfs/go-log/v2"
 )
+
+var log = logging.Logger("dagstore-impl")
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
 // Reader capabilities, whether the original mount is of remote or local kind.
@@ -58,6 +62,7 @@ func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, 
 
 func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	if u.passthrough {
+		log.Info("allowing pass-through fetch")
 		return u.underlying.Fetch(ctx)
 	}
 
@@ -68,6 +73,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	if u.transient != "" {
 		if _, err := os.Stat(u.transient); err == nil {
 			u.lk.Unlock()
+			log.Infow("will open existing transient on upgrader fetch", "transient path", u.transient)
 			return os.Open(u.transient)
 		}
 		// TODO add size check.
@@ -87,6 +93,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
+	log.Infow("will open fetched transient on upgrader fetch", "transient path", u.transient)
 	return os.Open(u.transient)
 }
 
@@ -133,6 +140,7 @@ func (u *Upgrader) Close() error {
 func (u *Upgrader) refetch(ctx context.Context) error {
 	u.lk.Lock()
 	if u.transient != "" {
+		log.Infow("removing existing transient", "transient path", u.transient)
 		_ = os.Remove(u.transient)
 	}
 	u.lk.Unlock()
@@ -164,6 +172,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 
 	// set the new transient path under a lock, and recycle the sync.Once.
 	u.lk.Lock()
+	log.Infow("updating transient path", "new path", file.Name())
 	u.transient = file.Name()
 	u.once = new(sync.Once)
 	u.lk.Unlock()
@@ -192,6 +201,7 @@ func (u *Upgrader) DeleteTransient() error {
 	// remove the transient and clear it always, even if os.Remove
 	// returns an error. This allows us to recover from errors like the user
 	// deleting the transient we're currently tracking.
+	log.Infow("removing transient in GC", "transient path", u.transient)
 	err := os.Remove(u.transient)
 	u.transient = ""
 	return err
