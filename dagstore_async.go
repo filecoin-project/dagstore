@@ -80,7 +80,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	var idx index.Index
 	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
 		var err error
-		idx, err = car.ReadOrGenerateIndex(reader)
+		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true))
 		return err
 	})
 	if err != nil {
