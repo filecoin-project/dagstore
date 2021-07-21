@@ -499,10 +499,17 @@ func (d *DAGStore) Close() error {
 }
 
 func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
+	if tsk.op == OpShardAcquire {
+		log.Info("in queueTask for OpShardAcquire")
+	}
+
 	select {
 	case <-d.ctx.Done():
 		return fmt.Errorf("dag store closed")
 	case ch <- tsk:
+		if tsk.op == OpShardAcquire {
+			log.Info("finished writing OpShardAcquire task to channel")
+		}
 		return nil
 	}
 }

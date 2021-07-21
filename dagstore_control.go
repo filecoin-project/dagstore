@@ -51,6 +51,7 @@ func (d *DAGStore) control() {
 	for {
 		// consume the next task; if we're shutting down, this method will error.
 		if tsk, err = d.consumeNext(); err != nil {
+			log.Errorw("failed to consume next task", "error", err)
 			break
 		}
 
