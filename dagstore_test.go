@@ -627,7 +627,7 @@ func TestIndexingFailure(t *testing.T) {
 			require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
 			require.Error(t, evt.After.Error)
 		default:
-			require.Fail(t, "unexpected op: %s", evt.Op)
+			t.Fatalf("unexpected op: %s", evt.Op)
 		}
 	}
 
@@ -665,13 +665,24 @@ func TestIndexingFailure(t *testing.T) {
 			require.False(t, istat.Exists)
 		}
 
-		evts := make([]Trace, 32)
+		// verify that all acquires fail immediately.
+		for k := range dagst.AllShardsInfo() {
+			ch := make(chan ShardResult)
+			err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+			require.NoError(t, err)
+			res := <-ch
+			require.Error(t, res.Error)
+			require.Equal(t, k, res.Key)
+			require.Nil(t, res.Accessor)
+		}
+
+		evts := make([]Trace, 48)
 		n, timedOut := sink.Read(evts, 50*time.Millisecond)
 		require.False(t, timedOut)
-		require.Equal(t, 32, n)
+		require.Equal(t, 48, n)
 
-		// these 32 traces are OpShardRecover, OpShardFail.
-		for i := 0; i < 32; i++ {
+		// these 48 traces are OpShardRecover, OpShardFail, OpShardAcquire.
+		for i := 0; i < 48; i++ {
 			evt := evts[i]
 			switch evt.Op {
 			case OpShardRecover:
@@ -680,8 +691,11 @@ func TestIndexingFailure(t *testing.T) {
 			case OpShardFail:
 				require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
 				require.Error(t, evt.After.Error)
+			case OpShardAcquire:
+				require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
 			default:
-				require.Fail(t, "unexpected op: %s", evt.Op)
+				t.Fatalf("unexpected op: %s", evt.Op)
 			}
 		}
 
@@ -721,13 +735,25 @@ func TestIndexingFailure(t *testing.T) {
 			require.True(t, istat.Exists)
 		}
 
-		evts := make([]Trace, 32)
+		// verify that all acquires succeed now.
+		for k := range dagst.AllShardsInfo() {
+			ch := make(chan ShardResult)
+			err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+			require.NoError(t, err)
+
+			res := <-ch
+			require.NoError(t, res.Error)
+			require.Equal(t, k, res.Key)
+			require.NotNil(t, res.Accessor)
+		}
+
+		evts := make([]Trace, 48)
 		n, timedOut := sink.Read(evts, 50*time.Millisecond)
 		require.False(t, timedOut)
-		require.Equal(t, 32, n)
+		require.Equal(t, 48, n)
 
-		// these 32 traces are OpShardRecover, OpShardFail.
-		for i := 0; i < 32; i++ {
+		// these 48 traces are OpShardRecover, OpShardFail.
+		for i := 0; i < 48; i++ {
 			evt := evts[i]
 			switch evt.Op {
 			case OpShardRecover:
@@ -736,8 +762,11 @@ func TestIndexingFailure(t *testing.T) {
 			case OpShardMakeAvailable:
 				require.EqualValues(t, ShardStateAvailable, evt.After.ShardState)
 				require.NoError(t, evt.After.Error)
+			case OpShardAcquire:
+				require.EqualValues(t, ShardStateServing, evt.After.ShardState)
+				require.NoError(t, evt.After.Error)
 			default:
-				require.Fail(t, "unexpected op: %s", evt.Op)
+				t.Fatalf("unexpected op: %s", evt.Op)
 			}
 		}
 	})
@@ -754,6 +783,7 @@ func TestFailureRecovery(t *testing.T) {
 		TraceCh:       sink,
 		FailureCh:     failures,
 	})
+
 	go RecoverImmediately(context.Background(), dagst, failures, 10) // 10 max attempts.
 	require.NoError(t, err)
 
@@ -789,7 +819,6 @@ func TestFailureRecovery(t *testing.T) {
 	require.Equal(t, counts[OpShardInitialize], 16)
 	require.Equal(t, counts[OpShardFail], 176)
 	require.Equal(t, counts[OpShardRecover], 160)
-
 }
 
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
