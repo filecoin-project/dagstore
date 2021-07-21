@@ -16,6 +16,9 @@ type waiter struct {
 }
 
 func (w waiter) deliver(res *ShardResult) {
+	if w.outCh == nil {
+		return
+	}
 	select {
 	case w.outCh <- *res:
 	case <-w.ctx.Done():
