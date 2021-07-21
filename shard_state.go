@@ -39,6 +39,7 @@ func (ss ShardState) String() string {
 		"ShardStateInitializing",
 		"ShardStateAvailable",
 		"ShardStateServing",
+		"ShardStateRecovering",
 		"ShardStateErrored",
 		"ShardStateUnknown"}[ss]
 }
