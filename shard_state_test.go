@@ -7,12 +7,12 @@ import (
 )
 
 func TestShardStates(t *testing.T) {
-	ss := ShardState(ShardStateRecovering)
+	ss := ShardStateRecovering
 	require.Equal(t, "ShardStateRecovering", ss.String())
 
-	ss = ShardState(ShardStateInitializing)
+	ss = ShardStateInitializing
 	require.Equal(t, "ShardStateInitializing", ss.String())
 
 	ss = ShardState(201)
-	require.Equal(t, "unknown shard state", ss.String())
+	require.Equal(t, "", ss.String())
 }
