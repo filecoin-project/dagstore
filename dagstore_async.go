@@ -22,6 +22,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
 		var err error
 		reader, err = mnt.Fetch(ctx)
+		log.Infow("finished mnt fetch", "err", err)
 		return err
 	})
 
@@ -39,6 +40,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
+		log.Errorw("error fetching index", "err", err)
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
 		}

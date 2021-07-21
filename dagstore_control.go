@@ -129,23 +129,28 @@ func (d *DAGStore) control() {
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
+			log.Info("will acquire shard")
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
+				log.Infow("shard is in errored state", "error", s.err)
 				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
 				res := &ShardResult{Key: s.key, Error: err}
+				log.Info("dispatching error result")
 				d.dispatchResult(res, w)
 				break
 			}
 
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
+				log.Info("shard is not available, make acquirer wait")
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 
 				// if the shard was registered with lazy init, and this is the
 				// first acquire, queue the initialization.
 				if s.state == ShardStateNew {
+					log.Info("queueing the acquire and do the initialization")
 					// Override the context with the background context.
 					// We can't use the acquirer's context for initialization
 					// because there can be multiple concurrent acquirers, and
