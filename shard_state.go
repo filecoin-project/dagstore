@@ -33,13 +33,19 @@ const (
 	ShardStateUnknown ShardState = 0xff
 )
 
+var shardStates = map[ShardState]string{
+	ShardStateNew:          "ShardStateNew",
+	ShardStateInitializing: "ShardStateInitializing",
+	ShardStateAvailable:    "ShardStateAvailable",
+	ShardStateServing:      "ShardStateServing",
+	ShardStateRecovering:   "ShardStateRecovering",
+	ShardStateErrored:      "ShardStateErrored",
+	ShardStateUnknown:      "ShardStateUnknown",
+}
+
 func (ss ShardState) String() string {
-	return [...]string{
-		"ShardStateNew",
-		"ShardStateInitializing",
-		"ShardStateAvailable",
-		"ShardStateServing",
-		"ShardStateRecovering",
-		"ShardStateErrored",
-		"ShardStateUnknown"}[ss]
+	if s, ok := shardStates[ss]; ok {
+		return s
+	}
+	return "unknown shard state"
 }
