@@ -72,7 +72,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Lock()
 	if u.transient != "" {
 		if _, err := os.Stat(u.transient); err == nil {
-			u.lk.Unlock()
+			defer u.lk.Unlock()
 			log.Infow("will open existing transient on upgrader fetch", "transient path", u.transient)
 			return os.Open(u.transient)
 		}
@@ -185,7 +185,9 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 // not in use. If the tracked transient is gone, this will reset the internal
 // state to "" (no transient) to enable recovery.
 func (u *Upgrader) DeleteTransient() error {
+	log.Info("will acquire GC transient lock")
 	u.lk.Lock()
+	log.Info("acquired GC transient lock")
 	defer u.lk.Unlock()
 
 	if u.transient == "" {

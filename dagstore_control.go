@@ -288,6 +288,7 @@ func (d *DAGStore) control() {
 			// TODO are we guaranteed that there are no queued items for this shard?
 
 		case OpShardGC:
+			log.Infow("doing GC now", "key", s.key)
 			var err error
 			if nAcq := len(s.wAcquire); s.state == ShardStateAvailable || s.state == ShardStateErrored || nAcq == 0 {
 				err = s.mount.DeleteTransient()
@@ -296,6 +297,7 @@ func (d *DAGStore) control() {
 			}
 			res := &ShardResult{Key: s.key, Error: err}
 			d.dispatchResult(res, tsk.waiter)
+			log.Infow("finished GC", "key", s.key)
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
@@ -309,6 +311,7 @@ func (d *DAGStore) control() {
 
 		// send a notification if the user provided a notification channel.
 		if d.traceCh != nil {
+			log.Info("will write to trace")
 			n := Trace{
 				Key: s.key,
 				Op:  tsk.op,
@@ -319,6 +322,7 @@ func (d *DAGStore) control() {
 				},
 			}
 			d.traceCh <- n
+			log.Info("finished writing to trace")
 		}
 
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)

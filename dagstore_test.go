@@ -455,6 +455,11 @@ func TestGC(t *testing.T) {
 		expect = append(expect, fmt.Sprintf("shard-%d", i))
 	}
 	require.ElementsMatch(t, expect, keys)
+
+	for _, k := range shards[25:50] {
+		accessors := acquireShard(t, dagst, k, 5)
+		releaseAll(t, dagst, k, accessors)
+	}
 }
 
 // TestLazyInitialization tests that lazy initialization initializes shards on
