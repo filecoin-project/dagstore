@@ -219,10 +219,18 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// in this state than the externalCh buffer size would exceed the channel
 	// buffer, and we'd block forever.
 	var register []*Shard
+	var recover []*Shard
 	for _, s := range dagst.shards {
+		// recover errored shards
+		if s.state == ShardStateErrored {
+			recover = append(recover, s)
+			continue
+		}
+
 		// reset to available, as we have no active acquirers at start.
 		if s.state == ShardStateServing {
 			s.state = ShardStateAvailable
+			continue
 		}
 
 		// Note: An available shard whose index has disappeared across restarts
@@ -238,6 +246,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 				s.state = ShardStateNew
 				register = append(register, s)
 			}
+			continue
 		}
 	}
 
@@ -260,6 +269,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// release the queued registrations before we return.
 	for _, s := range register {
 		_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+	}
+
+	for _, s := range recover {
+		_ = dagst.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
 	}
 
 	return dagst, nil

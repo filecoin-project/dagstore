@@ -779,56 +779,6 @@ func TestBlockCallback(t *testing.T) {
 	t.Skip("TODO")
 }
 
-func TestRegisterRemoveAcquire(t *testing.T) {
-	ds := datastore.NewMapDatastore()
-	dagst, err := NewDAGStore(Config{
-		MountRegistry: testRegistry(t),
-		TransientsDir: t.TempDir(),
-		Datastore:     ds,
-	})
-	require.NoError(t, err)
-
-	ch := make(chan ShardResult, 1)
-	k := shard.KeyFromString("foo")
-	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV1}, ch, RegisterOpts{})
-	require.NoError(t, err)
-
-	res := <-ch
-	require.NoError(t, res.Error)
-	require.EqualValues(t, k, res.Key)
-	require.Nil(t, res.Accessor)
-
-	info := dagst.AllShardsInfo()
-	require.Len(t, info, 1)
-	for _, ss := range info {
-		require.Equal(t, ShardStateAvailable, ss.ShardState)
-		require.NoError(t, ss.Error)
-	}
-
-	// verify index has been persisted
-	istat, err := dagst.indices.StatFullIndex(k)
-	require.NoError(t, err)
-	require.True(t, istat.Exists)
-
-	// now remove the index
-	d, err := dagst.indices.DropFullIndex(k)
-	require.NoError(t, err)
-	require.True(t, d)
-
-	// register fails
-	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV1}, ch, RegisterOpts{})
-	require.Error(t, err)
-
-	// acquire
-	ch2 := make(chan ShardResult, 1)
-	err = dagst.AcquireShard(context.Background(), k, ch2, AcquireOpts{})
-	require.NoError(t, err)
-
-	res = <-ch2
-	require.NoError(t, res.Error)
-
-}
-
 // registerShards registers n shards concurrently, using the CARv2 mount.
 func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
 	grp, _ := errgroup.WithContext(context.Background())
