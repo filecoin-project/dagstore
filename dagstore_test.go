@@ -51,6 +51,38 @@ func TestRegisterUsingExistingTransient(t *testing.T) {
 	require.NotNil(t, idx)
 }
 
+func TestRegisterWithaNilResponseChannel(t *testing.T) {
+	ds := datastore.NewMapDatastore()
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: t.TempDir(),
+		Datastore:     ds,
+	})
+	require.NoError(t, err)
+
+	k := shard.KeyFromString("foo")
+	// we pass a nil response channel to Register Shard here
+	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV1}, nil, RegisterOpts{})
+	require.NoError(t, err)
+
+	// acquire and wait for acquire
+	ch := make(chan ShardResult, 1)
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+	require.NoError(t, err)
+
+	res := <-ch
+	require.NoError(t, res.Error)
+	require.NotNil(t, res.Accessor)
+	require.EqualValues(t, k, res.Accessor.Shard())
+	err = res.Accessor.Close()
+	require.NoError(t, err)
+
+	// verify index has been persisted
+	istat, err := dagst.indices.StatFullIndex(k)
+	require.NoError(t, err)
+	require.True(t, istat.Exists)
+}
+
 func TestRegisterCarV1(t *testing.T) {
 	ds := datastore.NewMapDatastore()
 	dagst, err := NewDAGStore(Config{
