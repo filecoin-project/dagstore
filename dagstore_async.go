@@ -19,7 +19,9 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	k := s.key
 
 	var reader mount.Reader
+	log.Info("will call throttleFetch in acquireAsync")
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
+		log.Info("throttleFetch called in acquireAsync")
 		var err error
 		reader, err = mnt.Fetch(ctx)
 		log.Infow("finished mnt fetch", "err", err)
@@ -66,7 +68,11 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 // performing indexing.
 func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Mount) {
 	var reader mount.Reader
+	log.Info("will call throttleFetch in initializeShard")
+
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
+		log.Info("throttleFetch called in initializeShard")
+
 		var err error
 		reader, err = mnt.Fetch(ctx)
 		return err

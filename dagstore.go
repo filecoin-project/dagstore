@@ -347,6 +347,7 @@ type AcquireOpts struct {
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
 func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
+	log.Info("will acquire dasg store lock")
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -354,8 +355,10 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 		return fmt.Errorf("%s: %w", key.String(), ErrShardUnknown)
 	}
 	d.lk.Unlock()
+	log.Info("released dagstore lock")
 
 	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	log.Info("will send message to acquire shard")
 	return d.queueTask(tsk, d.externalCh)
 }
 
