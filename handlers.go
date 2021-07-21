@@ -6,7 +6,7 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
-// RecoverImmediately takes a failureCh were DAGStore failures are sent, and
+// RecoverImmediately takes a failureCh where DAGStore failures are sent, and
 // attempts to recover the shard immediately up until maxAttempts for each
 // unique shard.
 //
