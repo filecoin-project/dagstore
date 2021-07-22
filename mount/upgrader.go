@@ -153,15 +153,12 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	u.lk.Lock()
 	if u.transient != "" {
 		log.Debugw("removing dead transient", "shard", u.key, "dead_path", u.transient)
-		_ = os.Remove(u.transient)
+		if err := os.Remove(u.transient); err != nil {
+			log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.transient, "error", err)
+		}
+		u.transient = ""
 	}
 	u.lk.Unlock()
-
-	file, err := os.CreateTemp(u.rootdir, "transient-"+u.key+"-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	defer file.Close()
 
 	// sanity check on underlying mount.
 	if stat, err := u.underlying.Stat(ctx); err != nil {
@@ -169,6 +166,12 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	} else if !stat.Exists {
 		return fmt.Errorf("underlying mount no longer exists")
 	}
+
+	file, err := os.CreateTemp(u.rootdir, "transient-"+u.key+"-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer file.Close()
 
 	// fetch from underlying and copy.
 	from, err := u.underlying.Fetch(ctx)
