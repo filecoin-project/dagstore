@@ -235,12 +235,17 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	for _, s := range dagst.shards {
 		if s.state == ShardStateErrored {
 			if cfg.RecoverStrategy == DoNotRecover {
+				log.Debugw("shard is in errored state on startup but skipping recovery", "shard", s.key)
 				continue
 			}
 
 			if cfg.RecoverStrategy == RecoverLazy {
+				log.Debugw("shard is in errored state on startup, will recover with lazy init", "shard", s.key)
 				s.lazy = true
+			} else {
+				log.Debugw("shard is in errored state on startup, will recover", "shard", s.key, "lazy", s.lazy)
 			}
+
 			recover = append(recover, s)
 			continue
 		}
@@ -264,7 +269,6 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 				s.state = ShardStateNew
 				register = append(register, s)
 			}
-			continue
 		}
 	}
 
@@ -551,6 +555,9 @@ func (d *DAGStore) restoreState() error {
 			log.Warnf("failed to recover state of shard %s: %s; skipping", shard.KeyFromString(res.Key), err)
 			continue
 		}
+
+		log.Debugw("restored shard state on dagstore startup", "shard", s.key, "shard state", s.state, "shard error", s.err,
+			"shard lazy", s.lazy)
 		d.shards[s.key] = s
 	}
 }

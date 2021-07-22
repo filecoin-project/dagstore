@@ -22,6 +22,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
 		var err error
 		reader, err = mnt.Fetch(ctx)
+		log.Debugw("finished fetching from mount/upgrader for shard acquire", "shard", s.key, "error", err)
 		return err
 	})
 
@@ -39,6 +40,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
+		log.Debugw("failed to get index for shard while acquiring shard", "shard", s.key)
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
 		}
@@ -54,6 +56,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		return
 	}
 
+	log.Debugw("successfully fetched underlying mount data and index for acquiring shard", "shard", s.key)
 	sa, err := NewShardAccessor(reader, idx, s)
 
 	// send the shard accessor to the caller.
@@ -67,6 +70,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
 		var err error
 		reader, err = mnt.Fetch(ctx)
+		log.Debugw("finished fetching from mount/upgrader for initializing shard", "shard", s.key, "error", err)
 		return err
 	})
 
@@ -81,6 +85,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
 		var err error
 		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true))
+		log.Debugw("finished generating index for shard", "shard", s.key, "error", err)
 		return err
 	})
 	if err != nil {

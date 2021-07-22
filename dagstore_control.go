@@ -91,6 +91,7 @@ func (d *DAGStore) control() {
 
 			// if we already have the index for this shard, there's nothing to do here.
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				log.Debugw("already have an index for shard being initialized, nothing to do", "shard", s.key)
 				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.internalCh)
 				break
 			}
@@ -125,11 +126,13 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
+				// TODO Can we pass in  a looping pointer variable as is to a go-routine ?
 				go d.acquireAsync(w.ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
+			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
@@ -141,12 +144,14 @@ func (d *DAGStore) control() {
 			}
 
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
+				log.Debugw("shard isn't active yet, will queue acquire channel", "shard", s.key)
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 
 				// if the shard was registered with lazy init, and this is the
 				// first acquire, queue the initialization.
 				if s.state == ShardStateNew {
+					log.Debugw("acquiring shard with lazy init enabled, will queue shard initialization", "shard", s.key)
 					// Override the context with the background context.
 					// We can't use the acquirer's context for initialization
 					// because there can be multiple concurrent acquirers, and
@@ -318,6 +323,7 @@ func (d *DAGStore) control() {
 
 		// send a notification if the user provided a notification channel.
 		if d.traceCh != nil {
+			log.Debugw("will write trace to the trace channel", "shard", s.key)
 			n := Trace{
 				Key: s.key,
 				Op:  tsk.op,
@@ -328,6 +334,7 @@ func (d *DAGStore) control() {
 				},
 			}
 			d.traceCh <- n
+			log.Debugw("finished writing trace to the trace channel", "shard", s.key)
 		}
 
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
