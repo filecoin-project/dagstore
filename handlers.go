@@ -11,10 +11,13 @@ import (
 // unique shard.
 //
 // Attempt tracking does not survive restarts. When the passed context fires,
-// the failure handler will yield. It is recommended to call this
+// the failure handler will yield and the given `onDone` function is called before returning. It is recommended to call this
 // method from a dedicated goroutine, as it runs an infinite event
 // loop.
-func RecoverImmediately(ctx context.Context, dagst *DAGStore, failureCh chan ShardResult, maxAttempts uint64) {
+func RecoverImmediately(ctx context.Context, dagst *DAGStore, failureCh chan ShardResult, maxAttempts uint64, onDone func()) {
+	if onDone != nil {
+		defer onDone()
+	}
 	var (
 		recResCh = make(chan ShardResult, 128)
 		attempts = make(map[shard.Key]uint64)

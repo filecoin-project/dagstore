@@ -784,7 +784,7 @@ func TestFailureRecovery(t *testing.T) {
 		FailureCh:     failures,
 	})
 
-	go RecoverImmediately(context.Background(), dagst, failures, 10) // 10 max attempts.
+	go RecoverImmediately(context.Background(), dagst, failures, 10, nil) // 10 max attempts.
 	require.NoError(t, err)
 
 	// register 16 shards with junk in them, so they will fail indexing.
