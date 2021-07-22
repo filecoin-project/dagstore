@@ -23,6 +23,14 @@ var (
 	StoreNamespace = ds.NewKey("dagstore")
 )
 
+type RecoverStrategy int
+
+const (
+	DoNotRecover RecoverStrategy = iota
+	RecoverLazy
+	RecoverEager
+)
+
 var log = logging.Logger("dagstore")
 
 var (
@@ -124,12 +132,14 @@ type Config struct {
 	// TraceCh is a channel where the caller desires to be notified of every
 	// shard operation. Publishing to this channel blocks the event loop, so the
 	// caller must ensure the channel is serviced appropriately.
+	// Note: You must always be actively consuming from this channel or the event loop can block.
 	TraceCh chan<- Trace
 
 	// FailureCh is a channel to be notified every time that a shard moves to
 	// ShardStateErrored. A nil value will send no failure notifications.
 	// Failure events can be used to evaluate the error and call
 	// DAGStore.RecoverShard if deemed recoverable.
+	// Note: You must always be actively consuming from this channel or the event loop can block.
 	FailureCh chan<- ShardResult
 
 	// MaxConcurrentIndex is the maximum indexing jobs that can
@@ -139,6 +149,8 @@ type Config struct {
 	// MaxConcurrentFetch is the maximum fetching jobs that can
 	// run concurrently. 0 (default) disables throttling.
 	MaxConcurrentFetch int
+
+	RecoverStrategy RecoverStrategy
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -219,10 +231,24 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// in this state than the externalCh buffer size would exceed the channel
 	// buffer, and we'd block forever.
 	var register []*Shard
+	var recover []*Shard
 	for _, s := range dagst.shards {
+		if s.state == ShardStateErrored {
+			if cfg.RecoverStrategy == DoNotRecover {
+				continue
+			}
+
+			if cfg.RecoverStrategy == RecoverLazy {
+				s.lazy = true
+			}
+			recover = append(recover, s)
+			continue
+		}
+
 		// reset to available, as we have no active acquirers at start.
 		if s.state == ShardStateServing {
 			s.state = ShardStateAvailable
+			continue
 		}
 
 		// Note: An available shard whose index has disappeared across restarts
@@ -238,6 +264,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 				s.state = ShardStateNew
 				register = append(register, s)
 			}
+			continue
 		}
 	}
 
@@ -260,6 +287,11 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// release the queued registrations before we return.
 	for _, s := range register {
 		_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+	}
+
+	// queue shard recovery for shards in the errored state before we return.
+	for _, s := range recover {
+		_ = dagst.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
 	}
 
 	return dagst, nil

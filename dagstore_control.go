@@ -51,6 +51,7 @@ func (d *DAGStore) control() {
 	for {
 		// consume the next task; if we're shutting down, this method will error.
 		if tsk, err = d.consumeNext(); err != nil {
+			log.Errorw("failed to consume next task in event loop, will return from event loop", "error", err)
 			break
 		}
 
@@ -265,6 +266,17 @@ func (d *DAGStore) control() {
 				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
 			}
 
+			if s.lazy {
+				log.Debugw("shard recovered with lazy initialization, resetting shard state to ShardStateNew", "shard", s.key)
+				// waiter will be nil if this was a restart and not a call to RecoverShard().
+				if tsk.waiter != nil {
+					res := &ShardResult{Key: s.key}
+					d.dispatchResult(res, tsk.waiter)
+				}
+				s.state = ShardStateNew
+				break
+			}
+
 			// fetch again and reindex.
 			go d.initializeShard(tsk.ctx, s, s.mount)
 
@@ -285,6 +297,9 @@ func (d *DAGStore) control() {
 			var err error
 			if nAcq := len(s.wAcquire); s.state == ShardStateAvailable || s.state == ShardStateErrored || nAcq == 0 {
 				err = s.mount.DeleteTransient()
+				if err != nil {
+					log.Warnw("failed to delete transient", "shard", s.key, "error", err)
+				}
 			} else {
 				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
 			}

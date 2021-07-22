@@ -8,7 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	logging "github.com/ipfs/go-log/v2"
 )
+
+var log = logging.Logger("dagstore-upgrader")
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
 // Reader capabilities, whether the original mount is of remote or local kind.
@@ -48,6 +52,7 @@ func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, 
 
 	if initial != "" {
 		if _, err := os.Stat(initial); err == nil {
+			log.Debugw("upgrader initialized with existing transient that's alive", "shard", key, "transient", initial)
 			ret.transient = initial
 			return ret, nil
 		}
@@ -58,6 +63,7 @@ func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, 
 
 func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	if u.passthrough {
+		log.Debugw("mount has all capabilities, fetching from the underlying mount", "shard", u.key)
 		return u.underlying.Fetch(ctx)
 	}
 
@@ -66,9 +72,13 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	// after it's done, open the resulting transient.
 	u.lk.Lock()
 	if u.transient != "" {
+		log.Debugw("have an existing transient copy, checking if we can use it for the fetch", "shard", u.key, "transient", u.transient)
 		if _, err := os.Stat(u.transient); err == nil {
-			u.lk.Unlock()
+			log.Debugw("transient is still alive, not refetching", "shard", u.key, "transient", u.transient)
+			defer u.lk.Unlock()
 			return os.Open(u.transient)
+		} else {
+			log.Debugw("existing transient copy not usable, will refetch", "shard", u.key, "transient", u.transient, "error", err)
 		}
 		// TODO add size check.
 	}
@@ -78,7 +88,12 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Unlock()
 
 	var err error
-	once.Do(func() { err = u.refetch(ctx) })
+	once.Do(func() {
+		err = u.refetch(ctx)
+		if err != nil {
+			log.Errorw("failed to refetch transient", "shard", u.key, "error", err)
+		}
+	})
 
 	if err != nil {
 		return nil, fmt.Errorf("mount fetch failed: %w", err)
@@ -87,6 +102,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
+	log.Debugw("finished refetching transient", "shard", u.key, "transient", u.transient)
 	return os.Open(u.transient)
 }
 
@@ -131,8 +147,10 @@ func (u *Upgrader) Close() error {
 }
 
 func (u *Upgrader) refetch(ctx context.Context) error {
+	log.Debugw("will refetch transient", "shard", u.key, "transient", u.transient)
 	u.lk.Lock()
 	if u.transient != "" {
+		log.Debugw("removing transient", "shard", u.key, "transient", u.transient)
 		_ = os.Remove(u.transient)
 	}
 	u.lk.Unlock()
@@ -165,6 +183,7 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	// set the new transient path under a lock, and recycle the sync.Once.
 	u.lk.Lock()
 	u.transient = file.Name()
+	log.Debugw("updated transient path after refetching", "shard", u.key, "transient", u.transient)
 	u.once = new(sync.Once)
 	u.lk.Unlock()
 
@@ -180,12 +199,14 @@ func (u *Upgrader) DeleteTransient() error {
 	defer u.lk.Unlock()
 
 	if u.transient == "" {
+		log.Debugw("transient is empty, nothing to remove", "shard", u.key)
 		return nil // nothing to do.
 	}
 
 	// refuse to delete the transient if it's not being managed by us (i.e. in
 	// our transients root directory).
 	if _, err := filepath.Rel(u.rootdir, u.transient); err != nil {
+		log.Debugw("transient is not owned by us, nothing to remove", "shard", u.key)
 		return nil
 	}
 
@@ -194,5 +215,6 @@ func (u *Upgrader) DeleteTransient() error {
 	// deleting the transient we're currently tracking.
 	err := os.Remove(u.transient)
 	u.transient = ""
+	log.Debugw("deleted existing transient", "shard", u.key, "transient", u.transient, "error", err)
 	return err
 }
