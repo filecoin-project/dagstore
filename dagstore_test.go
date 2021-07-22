@@ -769,8 +769,56 @@ func TestIndexingFailure(t *testing.T) {
 				t.Fatalf("unexpected op: %s", evt.Op)
 			}
 		}
-
 	})
+}
+
+func TestFailureRecovery(t *testing.T) {
+	r := testRegistry(t)
+	dir := t.TempDir()
+	sink := tracer(128)
+	failures := make(chan ShardResult, 128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+		FailureCh:     failures,
+	})
+
+	go RecoverImmediately(context.Background(), dagst, failures, 10) // 10 max attempts.
+	require.NoError(t, err)
+
+	// register 16 shards with junk in them, so they will fail indexing.
+	resCh := make(chan ShardResult, 16)
+	junkmnt := *junkmnt // take a copy
+	for i := 0; i < 16; i++ {
+		k := shard.KeyFromString(strconv.Itoa(i))
+		err := dagst.RegisterShard(context.Background(), k, &junkmnt, resCh, RegisterOpts{})
+		require.NoError(t, err)
+	}
+
+	evts := make([]Trace, 368)
+	n, timedOut := sink.Read(evts, 5*time.Second)
+	require.False(t, timedOut)
+	require.Equal(t, 368, n)
+
+	counts := map[OpType]int{}
+	for _, evt := range evts {
+		counts[evt.Op]++
+
+		switch evt.Op {
+		case OpShardRecover:
+			require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
+			require.Error(t, evt.After.Error)
+		case OpShardFail:
+			require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
+			require.Error(t, evt.After.Error)
+		}
+	}
+
+	require.Equal(t, counts[OpShardRegister], 16)
+	require.Equal(t, counts[OpShardInitialize], 16)
+	require.Equal(t, counts[OpShardFail], 176)
+	require.Equal(t, counts[OpShardRecover], 160)
 }
 
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
