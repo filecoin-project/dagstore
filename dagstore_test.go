@@ -821,6 +821,167 @@ func TestFailureRecovery(t *testing.T) {
 	require.Equal(t, counts[OpShardRecover], 160)
 }
 
+func TestRecoveryOnStart(t *testing.T) {
+	// populate a few failing shards.
+	ds := datastore.NewMapDatastore()
+	r := testRegistry(t)
+	dir := t.TempDir()
+	sink := tracer(128)
+	failures := make(chan ShardResult, 128)
+	config := Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+		FailureCh:     failures,
+		Datastore:     ds,
+	}
+	dagst, err := NewDAGStore(config)
+	require.NoError(t, err)
+
+	// register 16 shards with junk in them, so they will fail indexing.
+	resCh := make(chan ShardResult, 16)
+	junkmnt := *junkmnt // take a copy
+	var keys []shard.Key
+	for i := 0; i < 16; i++ {
+		k := shard.KeyFromString(strconv.Itoa(i))
+		err := dagst.RegisterShard(context.Background(), k, &junkmnt, resCh, RegisterOpts{})
+		require.NoError(t, err)
+		keys = append(keys, k)
+	}
+
+	evts := make([]Trace, 48)
+	n, timedOut := sink.Read(evts, 1*time.Second)
+	require.False(t, timedOut)
+	require.Equal(t, 48, n)
+
+	counts := map[OpType]int{}
+	for _, evt := range evts {
+		counts[evt.Op]++
+	}
+	require.Equal(t, counts[OpShardRegister], 16)
+	require.Equal(t, counts[OpShardInitialize], 16)
+	require.Equal(t, counts[OpShardFail], 16)
+
+	err = dagst.Close()
+	require.NoError(t, err)
+
+	t.Run("DoNotRecover", func(t *testing.T) {
+		config.RecoverOnStart = DoNotRecover
+		dagst, err = NewDAGStore(config)
+		require.NoError(t, err)
+
+		// no events.
+		evts := make([]Trace, 16)
+		n, timedOut := sink.Read(evts, 1*time.Second)
+		require.True(t, timedOut)
+		require.Equal(t, 0, n)
+
+		// all shards continue as failed.
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, 16)
+		for _, ss := range info {
+			require.Equal(t, ShardStateErrored, ss.ShardState)
+			require.Error(t, ss.Error)
+		}
+	})
+
+	t.Run("RecoverNow", func(t *testing.T) {
+		config.RecoverOnStart = RecoverNow
+		dagst, err = NewDAGStore(config)
+		require.NoError(t, err)
+
+		// 32 events: recovery and failure.
+		evts := make([]Trace, 32)
+		n, timedOut := sink.Read(evts, 1*time.Second)
+		require.False(t, timedOut)
+		require.Equal(t, 32, n)
+
+		counts := map[OpType]int{}
+		for _, evt := range evts {
+			counts[evt.Op]++
+		}
+		require.Equal(t, counts[OpShardRecover], 16)
+		require.Equal(t, counts[OpShardFail], 16)
+
+		// all shards continue as failed.
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, 16)
+		for _, ss := range info {
+			require.Equal(t, ShardStateErrored, ss.ShardState)
+			require.Error(t, ss.Error)
+		}
+	})
+
+	t.Run("RecoverOnAcquire", func(t *testing.T) {
+		config.RecoverOnStart = RecoverOnAcquire
+		dagst, err = NewDAGStore(config)
+		require.NoError(t, err)
+
+		// 0 events.
+		evts := make([]Trace, 32)
+		n, timedOut := sink.Read(evts, 500*time.Millisecond)
+		require.True(t, timedOut)
+		require.Equal(t, 0, n)
+
+		// try to acquire every shard; all fail.
+		for _, k := range keys {
+			ch := make(chan ShardResult)
+			err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+			require.NoError(t, err)
+			res := <-ch
+			require.Equal(t, k, res.Key)
+			require.Error(t, res.Error)
+			require.Nil(t, res.Accessor)
+		}
+
+		// all shards continue as failed.
+		info := dagst.AllShardsInfo()
+		require.Len(t, info, 16)
+		for _, ss := range info {
+			require.Equal(t, ShardStateErrored, ss.ShardState)
+			require.Error(t, ss.Error)
+		}
+
+		// 48 events: acquire, recover, fail.
+		evts = make([]Trace, 64)
+		n, timedOut = sink.Read(evts, 500*time.Millisecond)
+		require.True(t, timedOut)
+		require.Equal(t, 48, n)
+
+		counts := map[OpType]int{}
+		for _, evt := range evts[:48] {
+			counts[evt.Op]++
+		}
+		require.Equal(t, counts[OpShardAcquire], 16)
+		require.Equal(t, counts[OpShardRecover], 16)
+		require.Equal(t, counts[OpShardFail], 16)
+
+		// a second acquire for each shard will also fail, and will not trigger
+		// any recovery events.
+		for _, k := range keys {
+			ch := make(chan ShardResult)
+			err := dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+			require.NoError(t, err)
+			res := <-ch
+			require.Equal(t, k, res.Key)
+			require.Error(t, res.Error)
+			require.Nil(t, res.Accessor)
+		}
+
+		// 16 events: acquire, and no more. verify that reading more times out.
+		evts = make([]Trace, 32)
+		n, timedOut = sink.Read(evts, 500*time.Millisecond)
+		require.True(t, timedOut)
+		require.Equal(t, 16, n)
+
+		counts = map[OpType]int{}
+		for _, evt := range evts[:16] {
+			require.Equal(t, OpShardAcquire, evt.Op)
+		}
+	})
+
+}
+
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {

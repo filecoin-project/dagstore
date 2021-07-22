@@ -137,9 +137,21 @@ func (d *DAGStore) control() {
 
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
-				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
-				res := &ShardResult{Key: s.key, Error: err}
-				d.dispatchResult(res, w)
+				if s.recoverOnNextAcquire {
+					// we are errored, but recovery was requested on the next acquire
+					// we park the acquirer and trigger a recover.
+					s.wAcquire = append(s.wAcquire, w)
+					s.recoverOnNextAcquire = false
+					// we use the global context instead of the acquire context
+					// to avoid the first context cancellation interrupting the
+					// recovery that may be blocking other acquirers with longer
+					// contexts.
+					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
+				} else {
+					err := fmt.Errorf("shard is in errored state; err: %w", s.err)
+					res := &ShardResult{Key: s.key, Error: err}
+					d.dispatchResult(res, w)
+				}
 				break
 			}
 
@@ -269,17 +281,6 @@ func (d *DAGStore) control() {
 				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
 			} else if !dropped {
 				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
-			}
-
-			if s.lazy {
-				log.Debugw("shard recovered with lazy initialization, resetting shard state to ShardStateNew", "shard", s.key)
-				// waiter will be nil if this was a restart and not a call to RecoverShard().
-				if tsk.waiter != nil {
-					res := &ShardResult{Key: s.key}
-					d.dispatchResult(res, tsk.waiter)
-				}
-				s.state = ShardStateNew
-				break
 			}
 
 			// fetch again and reindex.
