@@ -142,8 +142,10 @@ func (u *Upgrader) Deserialize(url *url.URL) error {
 	return u.underlying.Deserialize(url)
 }
 
+// TODO implement
 func (u *Upgrader) Close() error {
-	panic("implement me")
+	log.Warnf("Upgrader.Close() not implemented yet; call will no-op")
+	return nil
 }
 
 func (u *Upgrader) refetch(ctx context.Context) error {
