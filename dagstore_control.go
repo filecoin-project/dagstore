@@ -126,7 +126,6 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
-				// TODO Can we pass in  a looping pointer variable as is to a go-routine ?
 				go d.acquireAsync(w.ctx, w, s, s.mount)
 			}
 			s.wAcquire = s.wAcquire[:0]
