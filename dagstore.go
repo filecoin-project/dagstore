@@ -23,12 +23,23 @@ var (
 	StoreNamespace = ds.NewKey("dagstore")
 )
 
-type RecoverStrategy int
+// RecoverOnStartPolicy specifies the recovery policy for failed
+// shards on DAGStore start.
+type RecoverOnStartPolicy int
 
 const (
-	DoNotRecover RecoverStrategy = iota
-	RecoverLazy
-	RecoverEager
+	// DoNotRecover will not recover any failed shards on start. Recovery
+	// must be performed manually.
+	DoNotRecover RecoverOnStartPolicy = iota
+
+	// RecoverOnAcquire will automatically queue a recovery for a failed shard
+	// on the first acquire attempt, and will park that acquire while recovery
+	// is in progress.
+	RecoverOnAcquire
+
+	// RecoverNow will eagerly trigger a recovery for all failed shards
+	// upon start.
+	RecoverNow
 )
 
 var log = logging.Logger("dagstore")
@@ -132,14 +143,18 @@ type Config struct {
 	// TraceCh is a channel where the caller desires to be notified of every
 	// shard operation. Publishing to this channel blocks the event loop, so the
 	// caller must ensure the channel is serviced appropriately.
-	// Note: You must always be actively consuming from this channel or the event loop can block.
+	//
+	// Note: Not actively consuming from this channel will make the event
+	// loop block.
 	TraceCh chan<- Trace
 
 	// FailureCh is a channel to be notified every time that a shard moves to
 	// ShardStateErrored. A nil value will send no failure notifications.
 	// Failure events can be used to evaluate the error and call
 	// DAGStore.RecoverShard if deemed recoverable.
-	// Note: You must always be actively consuming from this channel or the event loop can block.
+	//
+	// Note: Not actively consuming from this channel will make the event
+	// loop block.
 	FailureCh chan<- ShardResult
 
 	// MaxConcurrentIndex is the maximum indexing jobs that can
@@ -150,7 +165,9 @@ type Config struct {
 	// run concurrently. 0 (default) disables throttling.
 	MaxConcurrentFetch int
 
-	RecoverStrategy RecoverStrategy
+	// RecoverOnStart specifies whether failed shards should be recovered
+	// on start.
+	RecoverOnStart RecoverOnStartPolicy
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -230,44 +247,36 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// ops after we spawn the control goroutine. Otherwise, having more shards
 	// in this state than the externalCh buffer size would exceed the channel
 	// buffer, and we'd block forever.
-	var register []*Shard
-	var recover []*Shard
+	var toRegister, toRecover []*Shard
 	for _, s := range dagst.shards {
-		if s.state == ShardStateErrored {
-			if cfg.RecoverStrategy == DoNotRecover {
-				log.Debugw("shard is in errored state on startup but skipping recovery", "shard", s.key)
-				continue
+		switch s.state {
+		case ShardStateErrored:
+			switch cfg.RecoverOnStart {
+			case DoNotRecover:
+				log.Infow("start: skipping recovery of shard in errored state", "shard", s.key, "error", s.err)
+			case RecoverOnAcquire:
+				log.Infow("start: failed shard will recover on next acquire", "shard", s.key, "error", s.err)
+				s.recoverOnNextAcquire = true
+			case RecoverNow:
+				log.Infow("start: recovering failed shard immediately", "shard", s.key, "error", s.err)
+				toRecover = append(toRecover, s)
 			}
 
-			if cfg.RecoverStrategy == RecoverLazy {
-				log.Debugw("shard is in errored state on startup, will recover with lazy init", "shard", s.key)
-				s.lazy = true
-			} else {
-				log.Debugw("shard is in errored state on startup, will recover", "shard", s.key, "lazy", s.lazy)
-			}
-
-			recover = append(recover, s)
-			continue
-		}
-
-		// reset to available, as we have no active acquirers at start.
-		if s.state == ShardStateServing {
+		case ShardStateServing:
+			// reset to available, as we have no active acquirers at start.
 			s.state = ShardStateAvailable
-			continue
-		}
-
-		// Note: An available shard whose index has disappeared across restarts
-		// will fail on the first acquisition.
-
-		// handle shards that were initializing when we shut down.
-		if s.state == ShardStateInitializing {
+		case ShardStateAvailable:
+			// Noop: An available shard whose index has disappeared across restarts
+			// will fail on the first acquisition.
+		case ShardStateInitializing:
+			// handle shards that were initializing when we shut down.
 			// if we already have the index for the shard, there's nothing else to do.
 			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
 				// reset back to new, and queue the OpShardRegister.
 				s.state = ShardStateNew
-				register = append(register, s)
+				toRegister = append(toRegister, s)
 			}
 		}
 	}
@@ -289,12 +298,12 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	// release the queued registrations before we return.
-	for _, s := range register {
+	for _, s := range toRegister {
 		_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
 	}
 
 	// queue shard recovery for shards in the errored state before we return.
-	for _, s := range recover {
+	for _, s := range toRecover {
 		_ = dagst.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
 	}
 

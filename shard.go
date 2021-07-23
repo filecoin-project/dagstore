@@ -41,6 +41,8 @@ type Shard struct {
 	state ShardState // persisted in PersistedShard.State
 	err   error      // persisted in PersistedShard.Error; populated if shard state is errored.
 
+	recoverOnNextAcquire bool // a shard marked in error state during initialization can be recovered on its first acquire.
+
 	// Waiters.
 	wRegister *waiter   // waiter for registration result.
 	wRecover  *waiter   // waiter for recovering an errored shard.
