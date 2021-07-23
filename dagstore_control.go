@@ -51,6 +51,7 @@ func (d *DAGStore) control() {
 	for {
 		// consume the next task; if we're shutting down, this method will error.
 		if tsk, err = d.consumeNext(); err != nil {
+			log.Errorw("failed to consume next task in event loop, will return from event loop", "error", err)
 			break
 		}
 
@@ -90,6 +91,7 @@ func (d *DAGStore) control() {
 
 			// if we already have the index for this shard, there's nothing to do here.
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+				log.Debugw("already have an index for shard being initialized, nothing to do", "shard", s.key)
 				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.internalCh)
 				break
 			}
@@ -129,23 +131,38 @@ func (d *DAGStore) control() {
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
+			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
-				err := fmt.Errorf("shard is in errored state; err: %w", s.err)
-				res := &ShardResult{Key: s.key, Error: err}
-				d.dispatchResult(res, w)
+				if s.recoverOnNextAcquire {
+					// we are errored, but recovery was requested on the next acquire
+					// we park the acquirer and trigger a recover.
+					s.wAcquire = append(s.wAcquire, w)
+					s.recoverOnNextAcquire = false
+					// we use the global context instead of the acquire context
+					// to avoid the first context cancellation interrupting the
+					// recovery that may be blocking other acquirers with longer
+					// contexts.
+					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
+				} else {
+					err := fmt.Errorf("shard is in errored state; err: %w", s.err)
+					res := &ShardResult{Key: s.key, Error: err}
+					d.dispatchResult(res, w)
+				}
 				break
 			}
 
 			if s.state != ShardStateAvailable && s.state != ShardStateServing {
+				log.Debugw("shard isn't active yet, will queue acquire channel", "shard", s.key)
 				// shard state isn't active yet; make this acquirer wait.
 				s.wAcquire = append(s.wAcquire, w)
 
 				// if the shard was registered with lazy init, and this is the
 				// first acquire, queue the initialization.
 				if s.state == ShardStateNew {
+					log.Debugw("acquiring shard with lazy init enabled, will queue shard initialization", "shard", s.key)
 					// Override the context with the background context.
 					// We can't use the acquirer's context for initialization
 					// because there can be multiple concurrent acquirers, and
@@ -285,6 +302,9 @@ func (d *DAGStore) control() {
 			var err error
 			if nAcq := len(s.wAcquire); s.state == ShardStateAvailable || s.state == ShardStateErrored || nAcq == 0 {
 				err = s.mount.DeleteTransient()
+				if err != nil {
+					log.Warnw("failed to delete transient", "shard", s.key, "error", err)
+				}
 			} else {
 				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
 			}
@@ -303,6 +323,7 @@ func (d *DAGStore) control() {
 
 		// send a notification if the user provided a notification channel.
 		if d.traceCh != nil {
+			log.Debugw("will write trace to the trace channel", "shard", s.key)
 			n := Trace{
 				Key: s.key,
 				Op:  tsk.op,
@@ -313,6 +334,7 @@ func (d *DAGStore) control() {
 				},
 			}
 			d.traceCh <- n
+			log.Debugw("finished writing trace to the trace channel", "shard", s.key)
 		}
 
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
