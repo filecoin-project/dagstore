@@ -36,31 +36,34 @@ func (o OpType) String() string {
 func (d *DAGStore) control() {
 	defer d.wg.Done()
 
-	var (
-		tsk       *task
-		prevState ShardState
-		err       error
-
-		// wFailure is a synthetic failure waiter that uses the DAGStore's
-		// global context and the failure channel. Only safe to actually use if
-		// d.failureCh != nil. wFailure is used to dispatch failure
-		// notifications to the application.
-		wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
-	)
+	// wFailure is a synthetic failure waiter that uses the DAGStore's
+	// global context and the failure channel. Only safe to actually use if
+	// d.failureCh != nil. wFailure is used to dispatch failure
+	// notifications to the application.
+	var wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
 
 	for {
-		// consume the next task; if we're shutting down, this method will error.
-		if tsk, err = d.consumeNext(); err != nil {
-			log.Errorw("failed to consume next task in event loop, will return from event loop", "error", err)
-			break
+		// consume the next task or GC request; if we're shutting down, this method will error.
+		tsk, gc, err := d.consumeNext()
+		if err != nil {
+			if err == context.Canceled {
+				log.Infow("dagstore closed")
+			} else {
+				log.Errorw("consuming next task failed; aborted event loop; dagstore unoperational", "error", err)
+			}
+			return
 		}
 
-		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
+		if gc != nil {
+			// this was a GC request.
+			d.gc(gc)
+			continue
+		}
 
 		s := tsk.shard
+		prevState := s.state
+		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "state", prevState, "error", tsk.err)
 		s.lk.Lock()
-
-		prevState = s.state
 
 		switch tsk.op {
 		case OpShardRegister:
@@ -341,27 +344,25 @@ func (d *DAGStore) control() {
 
 		s.lk.Unlock()
 	}
-
-	if err != context.Canceled {
-		log.Errorw("consuming next task failed; aborted event loop; dagstore unoperational", "error", err)
-	}
 }
 
-func (d *DAGStore) consumeNext() (tsk *task, error error) {
+func (d *DAGStore) consumeNext() (tsk *task, gc chan *GCResult, error error) {
 	select {
 	case tsk = <-d.internalCh: // drain internal first; these are tasks emitted from the event loop.
-		return tsk, nil
+		return tsk, nil, nil
 	case <-d.ctx.Done():
-		return nil, d.ctx.Err() // TODO drain and process before returning?
+		return nil, nil, d.ctx.Err() // TODO drain and process before returning?
 	default:
 	}
 
 	select {
 	case tsk = <-d.externalCh:
-		return tsk, nil
+		return tsk, nil, nil
 	case tsk = <-d.completionCh:
-		return tsk, nil
+		return tsk, nil, nil
+	case gc := <-d.gcCh:
+		return nil, gc, nil
 	case <-d.ctx.Done():
-		return nil, d.ctx.Err() // TODO drain and process before returning?
+		return nil, nil, d.ctx.Err() // TODO drain and process before returning?
 	}
 }

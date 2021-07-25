@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -35,6 +36,7 @@ type Upgrader struct {
 	// consume it.
 	once    *sync.Once
 	onceErr error
+	partial string
 	fetches int32
 }
 
@@ -75,7 +77,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	}
 
 	// determine if the transient is still alive.
-	// if not, get the current sync.Once and trigger a refresh.
+	// if not, delete it, get the current sync.Once and trigger a refresh.
 	// after it's done, open the resulting transient.
 	u.lk.Lock()
 	if u.transient != "" {
@@ -85,7 +87,11 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 			defer u.lk.Unlock()
 			return os.Open(u.transient)
 		} else {
-			log.Debugw("transient copy dead; refetching", "shard", u.key, "path", u.transient, "error", err)
+			log.Debugw("transient copy dead; removing and refetching", "shard", u.key, "path", u.transient, "error", err)
+			if err := os.Remove(u.transient); err != nil {
+				log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.transient, "error", err)
+			}
+			u.transient = ""
 		}
 		// TODO add size check.
 	}
@@ -96,11 +102,45 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 
 	once.Do(func() {
 		atomic.AddInt32(&u.fetches, 1)
-		err := u.refetch(ctx)
-		if err != nil {
-			log.Errorw("failed to refetch", "shard", u.key, "error", err)
+
+		// create a temporary file, partial file, and track it.
+		// onceErr can be set outside the lock because access is exclusive due to sync.Once
+		u.lk.Lock()
+		var file *os.File
+		file, u.onceErr = os.CreateTemp(u.rootdir, "transient-"+u.key+"-*-partial")
+		if u.onceErr != nil {
+			u.lk.Unlock()
+			return
 		}
-		u.onceErr = err
+		defer file.Close()
+		u.partial = file.Name()
+		u.lk.Unlock()
+
+		// do the refetch; abort and remove/reset the partial if it fails.
+		u.onceErr = u.refetch(ctx, file)
+		if u.onceErr != nil {
+			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
+			if err := os.Remove(u.partial); err != nil {
+				log.Warnw("failed to remove partial transient", "shard", u.key, "path", u.partial, "error", err)
+			}
+			u.partial = ""
+			return
+		}
+
+		// rename the partial file to a non-partial file.
+		// set the new transient path under a lock, and recycle the sync.Once.
+		u.lk.Lock()
+		final := strings.TrimSuffix(u.partial, "-partial")
+		if err := os.Rename(u.partial, final); err != nil {
+			log.Warnw("failed to rename partial transient partial transient", "shard", u.key, "from_path", u.partial, "to_path", final, "error", err)
+			final = u.partial // fall back to keeping the partial name.
+		}
+		u.partial = ""
+		u.transient = final
+		u.once = new(sync.Once)
+		u.lk.Unlock()
+
+		log.Debugw("transient path updated after refetching", "shard", u.key, "new_path", u.transient)
 	})
 
 	u.lk.Lock()
@@ -133,13 +173,22 @@ func (u *Upgrader) Stat(ctx context.Context) (Stat, error) {
 	return u.underlying.Stat(ctx)
 }
 
-// TransientPath returns the local path of the transient file. If the Upgrader
-// is passthrough, the return value will be "".
+// TransientPath returns the local path of the transient file, fully populated.
+// If the Upgrader is passthrough, the return value will be "".
 func (u *Upgrader) TransientPath() string {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
 	return u.transient
+}
+
+// PartialPath returns the local path of a partially populated transient. Will
+// be non-empty when the mount is being refetched.
+func (u *Upgrader) PartialPath() string {
+	u.lk.Lock()
+	defer u.lk.Unlock()
+
+	return u.partial
 }
 
 // TimesFetched returns the number of times that the underlying has
@@ -167,17 +216,8 @@ func (u *Upgrader) Close() error {
 	return nil
 }
 
-func (u *Upgrader) refetch(ctx context.Context) error {
+func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	log.Debugw("actually refetching", "shard", u.key, "dead_path", u.transient)
-	u.lk.Lock()
-	if u.transient != "" {
-		log.Debugw("removing dead transient", "shard", u.key, "dead_path", u.transient)
-		if err := os.Remove(u.transient); err != nil {
-			log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.transient, "error", err)
-		}
-		u.transient = ""
-	}
-	u.lk.Unlock()
 
 	// sanity check on underlying mount.
 	if stat, err := u.underlying.Stat(ctx); err != nil {
@@ -186,12 +226,6 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 		return fmt.Errorf("underlying mount no longer exists")
 	}
 
-	file, err := os.CreateTemp(u.rootdir, "transient-"+u.key+"-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	defer file.Close()
-
 	// fetch from underlying and copy.
 	from, err := u.underlying.Fetch(ctx)
 	if err != nil {
@@ -199,17 +233,10 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	}
 	defer from.Close()
 
-	_, err = io.Copy(file, from)
+	_, err = io.Copy(into, from)
 	if err != nil {
 		return fmt.Errorf("failed to copy underlying mount to transient file: %w", err)
 	}
-
-	// set the new transient path under a lock, and recycle the sync.Once.
-	u.lk.Lock()
-	u.transient = file.Name()
-	log.Debugw("transient path updated after refetching", "shard", u.key, "new_path", u.transient)
-	u.once = new(sync.Once)
-	u.lk.Unlock()
 
 	return nil
 }

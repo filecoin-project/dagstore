@@ -10,7 +10,6 @@ import (
 	"github.com/filecoin-project/dagstore/index"
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
-	"github.com/hashicorp/go-multierror"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -86,6 +85,8 @@ type DAGStore struct {
 	// back to the application. Serviced by a dispatcher goroutine.
 	// See note in dispatchResultsCh for background.
 	dispatchFailuresCh chan *dispatch
+	// gcCh is where requests for GC are sent.
+	gcCh chan chan *GCResult
 
 	// Channels not owned by us.
 	//
@@ -210,6 +211,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		internalCh:        make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
 		completionCh:      make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
 		dispatchResultsCh: make(chan *dispatch, 128), // len=128, same as externalCh.
+		gcCh:              make(chan chan *GCResult, 8),
 		traceCh:           cfg.TraceCh,
 		failureCh:         cfg.FailureCh,
 		throttleFetch:     noopThrottler{},
@@ -470,57 +472,29 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 	return ret
 }
 
-// GC attempts to reclaim the transient files of shards that are currently
-// available but inactive.
+// GC performs DAG store garbage collection.
 //
-// It is not strictly atomic for now, as it determines which shards to reclaim
-// first, sends operations to the event loop, and waits for them to execute.
-// In the meantime, there could be state transitions that change reclaimability
-// of shards (some shards deemed reclaimable are no longer so, and vice versa).
+// This comprises two steps:
+//  1. Reclaim the transient files of shards that are currently available but
+//  inactive, or errored.
+//  2. Reconciles the transients directory with the mounts, by removing orphaned
+//  files (unreferenced files).
 //
-// However, the event loop checks for safety prior to deletion, so it will skip
-// over shards that are no longer safe to delete.
-func (d *DAGStore) GC(ctx context.Context) (map[shard.Key]error, error) {
-	var (
-		merr    *multierror.Error
-		reclaim []*Shard
-	)
-
-	d.lk.RLock()
-	for _, s := range d.shards {
-		s.lk.RLock()
-		if s.state == ShardStateAvailable || s.state == ShardStateErrored {
-			reclaim = append(reclaim, s)
-		}
-		s.lk.RUnlock()
-	}
-	d.lk.RUnlock()
-
-	var await int
-	ch := make(chan ShardResult, len(reclaim))
-	for _, s := range reclaim {
-		tsk := &task{op: OpShardGC, shard: s, waiter: &waiter{ctx: ctx, outCh: ch}}
-
-		err := d.queueTask(tsk, d.externalCh)
-		if err == nil {
-			await++
-		} else {
-			merr = multierror.Append(merr, fmt.Errorf("failed to enqueue GC task for shard %s: %w", s.key, err))
-		}
+// GC runs with exclusivity from the event loop.
+func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
+	ch := make(chan *GCResult)
+	select {
+	case d.gcCh <- ch:
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 
-	// collect all results.
-	results := make(map[shard.Key]error, await)
-	for i := 0; i < await; i++ {
-		select {
-		case res := <-ch:
-			results[res.Key] = res.Error
-		case <-ctx.Done():
-			return results, ctx.Err()
-		}
+	select {
+	case res := <-ch:
+		return res, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-
-	return results, nil
 }
 
 func (d *DAGStore) Close() error {
