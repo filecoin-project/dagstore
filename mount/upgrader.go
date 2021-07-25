@@ -28,7 +28,12 @@ type Upgrader struct {
 
 	lk        sync.Mutex
 	transient string
-	once      *sync.Once
+
+	// once guards deduplicates concurrent refetch requests; the caller that
+	// gets to run stores the result in onceErr, for other concurrent callers to
+	// consume it.
+	once    *sync.Once
+	onceErr error
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -87,20 +92,20 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	once := u.once
 	u.lk.Unlock()
 
-	var err error
 	once.Do(func() {
-		err = u.refetch(ctx)
+		err := u.refetch(ctx)
 		if err != nil {
 			log.Errorw("failed to refetch", "shard", u.key, "error", err)
 		}
+		u.onceErr = err
 	})
-
-	if err != nil {
-		return nil, fmt.Errorf("mount fetch failed: %w", err)
-	}
 
 	u.lk.Lock()
 	defer u.lk.Unlock()
+
+	if u.onceErr != nil {
+		return nil, fmt.Errorf("mount fetch failed: %w", u.onceErr)
+	}
 
 	log.Debugw("refetched successfully", "shard", u.key, "path", u.transient)
 	return os.Open(u.transient)

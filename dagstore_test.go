@@ -982,6 +982,63 @@ func TestRecoveryOnStart(t *testing.T) {
 
 }
 
+// TestFailingAcquireErrorPropagates tests that if multiple acquierers are
+// queued, and the fetch fails, all acquires will be notified of the failure.
+func TestFailingAcquireErrorPropagates(t *testing.T) {
+	r := testRegistry(t)
+
+	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	sink := tracer(128)
+	config := Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+	}
+	dagst, err := NewDAGStore(config)
+	require.NoError(t, err)
+
+	// create a junk mount and front it with a blocking mount.
+	junkmnt := *junkmnt
+	mnt := newBlockingMount(&junkmnt)
+
+	// register with lazy init, so that the moun isn't hit until the first acquire.
+	k := shard.KeyFromString("foo")
+	ch := make(chan ShardResult, 128)
+	err = dagst.RegisterShard(context.Background(), k, mnt, ch, RegisterOpts{LazyInitialization: true})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	// request five acquires back to back.
+	require.NoError(t, dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{}))
+	require.NoError(t, dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{}))
+	require.NoError(t, dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{}))
+	require.NoError(t, dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{}))
+	require.NoError(t, dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{}))
+
+	select {
+	case <-ch:
+		t.FailNow()
+	case <-time.After(1 * time.Second):
+		// acquires still parked, good.
+	}
+
+	// unblock the mount.
+	mnt.UnblockNext(1)
+
+	// all acquires will the same error
+	for i := 0; i < 5; i++ {
+		res := <-ch
+		require.Error(t, res.Error)
+		require.Contains(t, res.Error.Error(), "invalid header: malformed stream: invalid appearance of bytes token; expected map key")
+		require.Nil(t, res.Accessor)
+	}
+
+}
+
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {
