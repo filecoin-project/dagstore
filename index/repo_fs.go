@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ var _ FullIndexRepo = (*FSIndexRepo)(nil)
 func NewFSRepo(baseDir string) (*FSIndexRepo, error) {
 	err := os.MkdirAll(baseDir, os.ModePerm)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create index repo dir: %w", err)
 	}
 
 	l := &FSIndexRepo{baseDir: baseDir}

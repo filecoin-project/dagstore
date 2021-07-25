@@ -11,7 +11,7 @@ var ErrNotFound = errors.New("index not found")
 
 // Repo is the central index repository object that manages full indices and
 // manifests.
-type Repo struct {
+type Repo interface {
 	FullIndexRepo
 	ManifestRepo
 }
