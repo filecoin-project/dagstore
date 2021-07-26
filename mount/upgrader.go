@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	logging "github.com/ipfs/go-log/v2"
 )
@@ -29,15 +28,15 @@ type Upgrader struct {
 	passthrough bool
 
 	lk        sync.Mutex
-	transient string
+	transient string // guarded by lk
+	partial   string // guarded by lk
+	fetches   int    // guarded by lk
 
 	// once guards deduplicates concurrent refetch requests; the caller that
 	// gets to run stores the result in onceErr, for other concurrent callers to
 	// consume it.
-	once    *sync.Once
-	onceErr error
-	partial string
-	fetches int32
+	once    *sync.Once // guarded by lk
+	onceErr error      // NOT guarded by lk; access coordinated by sync.Once
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -101,23 +100,29 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Unlock()
 
 	once.Do(func() {
-		atomic.AddInt32(&u.fetches, 1)
-
 		// create a temporary file, partial file, and track it.
 		// onceErr can be set outside the lock because access is exclusive due to sync.Once
-		u.lk.Lock()
 		var file *os.File
 		file, u.onceErr = os.CreateTemp(u.rootdir, "transient-"+u.key+"-*-partial")
 		if u.onceErr != nil {
-			u.lk.Unlock()
 			return
 		}
 		defer file.Close()
+
+		u.lk.Lock()
+		u.fetches++
 		u.partial = file.Name()
 		u.lk.Unlock()
 
 		// do the refetch; abort and remove/reset the partial if it fails.
+		// perform outside the lock as this is a long-running operation.
+		// u.onceErr is only written by the goroutine that gets to run sync.Once
+		// and it's only read after it finishes.
 		u.onceErr = u.refetch(ctx, file)
+
+		u.lk.Lock() // reacquire the lock, as we'll be modifying paths.
+		defer u.lk.Unlock()
+
 		if u.onceErr != nil {
 			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
 			if err := os.Remove(u.partial); err != nil {
@@ -129,16 +134,14 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 
 		// rename the partial file to a non-partial file.
 		// set the new transient path under a lock, and recycle the sync.Once.
-		u.lk.Lock()
 		final := strings.TrimSuffix(u.partial, "-partial")
 		if err := os.Rename(u.partial, final); err != nil {
-			log.Warnw("failed to rename partial transient partial transient", "shard", u.key, "from_path", u.partial, "to_path", final, "error", err)
+			log.Warnw("failed to rename partial transient", "shard", u.key, "from_path", u.partial, "to_path", final, "error", err)
 			final = u.partial // fall back to keeping the partial name.
 		}
 		u.partial = ""
 		u.transient = final
 		u.once = new(sync.Once)
-		u.lk.Unlock()
 
 		log.Debugw("transient path updated after refetching", "shard", u.key, "new_path", u.transient)
 	})
@@ -194,7 +197,10 @@ func (u *Upgrader) PartialPath() string {
 // TimesFetched returns the number of times that the underlying has
 // been fetched.
 func (u *Upgrader) TimesFetched() int {
-	return int(atomic.LoadInt32(&u.fetches))
+	u.lk.Lock()
+	defer u.lk.Unlock()
+
+	return u.fetches
 }
 
 // Underlying returns the underlying mount.
