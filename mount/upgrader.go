@@ -27,15 +27,23 @@ type Upgrader struct {
 	key         string
 	passthrough bool
 
-	lk        sync.Mutex
-	transient string
+	// paths: pathComplete is the path of transients that are
+	// completely downloaded; pathPartial is the path where in-progress
+	// downloads are placed. Once fully downloaded, the file is renamed to
+	// pathComplete.
+	pathComplete string
+	pathPartial  string
 
+	lk    sync.Mutex
+	path  string // guarded by lk
+	ready bool   // guarded by lk
 	// once guards deduplicates concurrent refetch requests; the caller that
 	// gets to run stores the result in onceErr, for other concurrent callers to
 	// consume it.
-	once    *sync.Once
-	onceErr error
-	fetches int32
+	once    *sync.Once // guarded by lk
+	onceErr error      // NOT guarded by lk; access coordinated by sync.Once
+
+	fetches int32 // guarded by atomic
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -44,7 +52,14 @@ var _ Mount = (*Upgrader)(nil)
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
 func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, error) {
-	ret := &Upgrader{underlying: underlying, key: key, rootdir: rootdir, once: new(sync.Once)}
+	ret := &Upgrader{
+		underlying:   underlying,
+		key:          key,
+		rootdir:      rootdir,
+		once:         new(sync.Once),
+		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
+		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
+	}
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
@@ -60,7 +75,8 @@ func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, 
 	if initial != "" {
 		if _, err := os.Stat(initial); err == nil {
 			log.Debugw("initialized with existing transient that's alive", "shard", key, "path", initial)
-			ret.transient = initial
+			ret.path = initial
+			ret.ready = true
 			return ret, nil
 		}
 	}
@@ -75,17 +91,21 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	}
 
 	// determine if the transient is still alive.
-	// if not, get the current sync.Once and trigger a refresh.
+	// if not, delete it, get the current sync.Once and trigger a refresh.
 	// after it's done, open the resulting transient.
 	u.lk.Lock()
-	if u.transient != "" {
-		log.Debugw("transient copy exists; check liveness", "shard", u.key, "path", u.transient)
-		if _, err := os.Stat(u.transient); err == nil {
-			log.Debugw("transient copy alive; not refetching", "shard", u.key, "path", u.transient)
+	if u.ready {
+		log.Debugw("transient local copy exists; check liveness", "shard", u.key, "path", u.path)
+		if _, err := os.Stat(u.path); err == nil {
+			log.Debugw("transient copy alive; not refetching", "shard", u.key, "path", u.path)
 			defer u.lk.Unlock()
-			return os.Open(u.transient)
+			return os.Open(u.path)
 		} else {
-			log.Debugw("transient copy dead; refetching", "shard", u.key, "path", u.transient, "error", err)
+			u.ready = false
+			log.Debugw("transient copy dead; removing and refetching", "shard", u.key, "path", u.path, "error", err)
+			if err := os.Remove(u.path); err != nil {
+				log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.path, "error", err)
+			}
 		}
 		// TODO add size check.
 	}
@@ -95,23 +115,56 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Unlock()
 
 	once.Do(func() {
-		atomic.AddInt32(&u.fetches, 1)
-		err := u.refetch(ctx)
-		if err != nil {
-			log.Errorw("failed to refetch", "shard", u.key, "error", err)
+		// Create a new file in the partial location.
+		// os.Create truncates existing files.
+		var partial *os.File
+		partial, u.onceErr = os.Create(u.pathPartial)
+		if u.onceErr != nil {
+			return
 		}
-		u.onceErr = err
+		defer partial.Close()
+
+		// do the refetch; abort and remove/reset the partial if it fails.
+		// perform outside the lock as this is a long-running operation.
+		// u.onceErr is only written by the goroutine that gets to run sync.Once
+		// and it's only read after it finishes.
+		u.onceErr = u.refetch(ctx, partial)
+		if u.onceErr != nil {
+			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
+			if err := os.Remove(u.pathPartial); err != nil {
+				log.Warnw("failed to remove partial transient", "shard", u.key, "path", u.pathPartial, "error", err)
+			}
+			return
+		}
+
+		// rename the partial file to a non-partial file.
+		// set the new transient path under a lock, and recycle the sync.Once.
+		// if the target file exists, os.Rename replaces it.
+		if err := os.Rename(u.pathPartial, u.pathComplete); err != nil {
+			log.Warnw("failed to rename partial transient", "shard", u.key, "from_path", u.pathPartial, "to_path", u.pathComplete, "error", err)
+		}
+
+		u.lk.Lock()
+		u.path = u.pathComplete
+		u.ready = true
+		u.once = new(sync.Once)
+		u.lk.Unlock()
+
+		log.Debugw("transient path updated after refetching", "shard", u.key, "new_path", u.pathComplete)
 	})
 
-	u.lk.Lock()
-	defer u.lk.Unlock()
-
-	if u.onceErr != nil {
-		return nil, fmt.Errorf("mount fetch failed: %w", u.onceErr)
+	// There's a tiny, tiny possibility of a race here if a new refetch with
+	// the recycled sync.Once comes in an updates onceErr before the waiters
+	// have read it. Not worth making perfect now, but we should revisit
+	// this recipe. Can probably use a sync.Cond with atomic counters.
+	// TODO revisit this.
+	err := u.onceErr
+	if err != nil {
+		return nil, fmt.Errorf("mount fetch failed: %w", err)
 	}
 
-	log.Debugw("refetched successfully", "shard", u.key, "path", u.transient)
-	return os.Open(u.transient)
+	log.Debugw("refetched successfully", "shard", u.key, "path", u.pathComplete)
+	return os.Open(u.pathComplete)
 }
 
 func (u *Upgrader) Info() Info {
@@ -124,8 +177,8 @@ func (u *Upgrader) Info() Info {
 }
 
 func (u *Upgrader) Stat(ctx context.Context) (Stat, error) {
-	if u.transient != "" {
-		if stat, err := os.Stat(u.transient); err == nil {
+	if u.path != "" {
+		if stat, err := os.Stat(u.path); err == nil {
 			ret := Stat{Exists: true, Size: stat.Size()}
 			return ret, nil
 		}
@@ -133,13 +186,12 @@ func (u *Upgrader) Stat(ctx context.Context) (Stat, error) {
 	return u.underlying.Stat(ctx)
 }
 
-// TransientPath returns the local path of the transient file. If the Upgrader
-// is passthrough, the return value will be "".
+// TransientPath returns the local path of the transient file, if one exists.
 func (u *Upgrader) TransientPath() string {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
-	return u.transient
+	return u.path
 }
 
 // TimesFetched returns the number of times that the underlying has
@@ -167,17 +219,8 @@ func (u *Upgrader) Close() error {
 	return nil
 }
 
-func (u *Upgrader) refetch(ctx context.Context) error {
-	log.Debugw("actually refetching", "shard", u.key, "dead_path", u.transient)
-	u.lk.Lock()
-	if u.transient != "" {
-		log.Debugw("removing dead transient", "shard", u.key, "dead_path", u.transient)
-		if err := os.Remove(u.transient); err != nil {
-			log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.transient, "error", err)
-		}
-		u.transient = ""
-	}
-	u.lk.Unlock()
+func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
+	log.Debugw("actually refetching", "shard", u.key, "path", into.Name())
 
 	// sanity check on underlying mount.
 	if stat, err := u.underlying.Stat(ctx); err != nil {
@@ -186,12 +229,6 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 		return fmt.Errorf("underlying mount no longer exists")
 	}
 
-	file, err := os.CreateTemp(u.rootdir, "transient-"+u.key+"-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
-	}
-	defer file.Close()
-
 	// fetch from underlying and copy.
 	from, err := u.underlying.Fetch(ctx)
 	if err != nil {
@@ -199,17 +236,10 @@ func (u *Upgrader) refetch(ctx context.Context) error {
 	}
 	defer from.Close()
 
-	_, err = io.Copy(file, from)
+	_, err = io.Copy(into, from)
 	if err != nil {
 		return fmt.Errorf("failed to copy underlying mount to transient file: %w", err)
 	}
-
-	// set the new transient path under a lock, and recycle the sync.Once.
-	u.lk.Lock()
-	u.transient = file.Name()
-	log.Debugw("transient path updated after refetching", "shard", u.key, "new_path", u.transient)
-	u.once = new(sync.Once)
-	u.lk.Unlock()
 
 	return nil
 }
@@ -222,14 +252,14 @@ func (u *Upgrader) DeleteTransient() error {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
-	if u.transient == "" {
+	if u.path == "" {
 		log.Debugw("transient is empty; nothing to remove", "shard", u.key)
 		return nil // nothing to do.
 	}
 
 	// refuse to delete the transient if it's not being managed by us (i.e. in
 	// our transients root directory).
-	if _, err := filepath.Rel(u.rootdir, u.transient); err != nil {
+	if _, err := filepath.Rel(u.rootdir, u.path); err != nil {
 		log.Debugw("transient is not owned by us; nothing to remove", "shard", u.key)
 		return nil
 	}
@@ -237,8 +267,9 @@ func (u *Upgrader) DeleteTransient() error {
 	// remove the transient and clear it always, even if os.Remove
 	// returns an error. This allows us to recover from errors like the user
 	// deleting the transient we're currently tracking.
-	err := os.Remove(u.transient)
-	u.transient = ""
-	log.Debugw("deleted existing transient", "shard", u.key, "path", u.transient, "error", err)
+	err := os.Remove(u.path)
+	u.path = ""
+	u.ready = false
+	log.Debugw("deleted existing transient", "shard", u.key, "path", u.path, "error", err)
 	return err
 }

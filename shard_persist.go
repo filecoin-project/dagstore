@@ -22,8 +22,8 @@ type PersistedShard struct {
 }
 
 // MarshalJSON returns a serialized representation of the state. It must be
-// called from inside the event loop, as it accesses mutable state, or under a
-// shard read lock.
+// called with a shard lock (read, at least), such as from inside the event
+// loop, as it accesses mutable state.
 func (s *Shard) MarshalJSON() ([]byte, error) {
 	u, err := s.d.mounts.Represent(s.mount)
 	if err != nil {
@@ -80,6 +80,8 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// persist persists the shard's state into the supplied Datastore. It calls
+// MarshalJSON, which requires holding a shard lock to be safe.
 func (s *Shard) persist(store ds.Datastore) error {
 	ps, err := s.MarshalJSON()
 	if err != nil {

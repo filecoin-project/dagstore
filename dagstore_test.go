@@ -2,7 +2,9 @@ package dagstore
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"testing"
@@ -420,9 +422,10 @@ func TestRestartResumesRegistration(t *testing.T) {
 }
 
 func TestGC(t *testing.T) {
+	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
-		TransientsDir: t.TempDir(),
+		TransientsDir: dir,
 	})
 	require.NoError(t, err)
 
@@ -444,19 +447,49 @@ func TestGC(t *testing.T) {
 
 	results, err := dagst.GC(context.Background())
 	require.NoError(t, err)
-	require.Len(t, results, 75) // all but the second batch of 25 have been reclaimed.
+	require.Len(t, results.Shards, 75) // all but the second batch of 25 have been reclaimed.
+	require.Zero(t, results.ShardFailures())
 
-	var keys []string
-	for k, err := range results {
-		keys = append(keys, k.String())
+	for i := 25; i < 100; i++ {
+		k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
+		err, ok := results.Shards[k]
+		require.True(t, ok)
+		require.NoError(t, err)
+	}
+}
+
+func TestOrphansRemovedOnStartup(t *testing.T) {
+	dir := t.TempDir()
+
+	// create random files in the transients directory, which we expect the GC
+	// procedure to remove.
+	var orphaned []string
+	for i := 0; i < 100; i++ {
+		file, err := os.CreateTemp(dir, "")
+		require.NoError(t, err)
+		orphaned = append(orphaned, file.Name())
+
+		// write random data
+		n, err := io.Copy(file, io.LimitReader(rand.Reader, 1024))
+		require.NoError(t, err)
+		require.EqualValues(t, 1024, n)
+
+		err = file.Close()
 		require.NoError(t, err)
 	}
 
-	var expect []string
-	for i := 25; i < 100; i++ {
-		expect = append(expect, fmt.Sprintf("shard-%d", i))
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+	})
+	require.NoError(t, err)
+	defer dagst.Close()
+
+	// orphaned files are gone
+	for _, p := range orphaned {
+		_, err := os.Stat(p)
+		require.ErrorIs(t, err, os.ErrNotExist)
 	}
-	require.ElementsMatch(t, expect, keys)
 }
 
 // TestLazyInitialization tests that lazy initialization initializes shards on
