@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	logging "github.com/ipfs/go-log/v2"
 )
@@ -34,6 +35,7 @@ type Upgrader struct {
 	// consume it.
 	once    *sync.Once
 	onceErr error
+	fetches int32
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -93,6 +95,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Unlock()
 
 	once.Do(func() {
+		atomic.AddInt32(&u.fetches, 1)
 		err := u.refetch(ctx)
 		if err != nil {
 			log.Errorw("failed to refetch", "shard", u.key, "error", err)
@@ -137,6 +140,17 @@ func (u *Upgrader) TransientPath() string {
 	defer u.lk.Unlock()
 
 	return u.transient
+}
+
+// TimesFetched returns the number of times that the underlying has
+// been fetched.
+func (u *Upgrader) TimesFetched() int {
+	return int(atomic.LoadInt32(&u.fetches))
+}
+
+// Underlying returns the underlying mount.
+func (u *Upgrader) Underlying() Mount {
+	return u.underlying
 }
 
 func (u *Upgrader) Serialize() *url.URL {

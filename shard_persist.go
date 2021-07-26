@@ -13,11 +13,12 @@ import (
 
 // PersistedShard is the persistent representation of the Shard.
 type PersistedShard struct {
-	Key   string     `json:"k"`
-	URL   string     `json:"u"`
-	State ShardState `json:"s"`
-	Lazy  bool       `json:"l"`
-	Error string     `json:"e"`
+	Key           string     `json:"k"`
+	URL           string     `json:"u"`
+	TransientPath string     `json:"t"`
+	State         ShardState `json:"s"`
+	Lazy          bool       `json:"l"`
+	Error         string     `json:"e"`
 }
 
 // MarshalJSON returns a serialized representation of the state. It must be
@@ -29,10 +30,11 @@ func (s *Shard) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("failed to encode mount: %w", err)
 	}
 	ps := PersistedShard{
-		Key:   s.key.String(),
-		URL:   u.String(),
-		State: s.state,
-		Lazy:  s.lazy,
+		Key:           s.key.String(),
+		URL:           u.String(),
+		State:         s.state,
+		Lazy:          s.lazy,
+		TransientPath: s.mount.TransientPath(),
 	}
 	if s.err != nil {
 		ps.Error = s.err.Error()
@@ -70,7 +72,7 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to instantiate mount from URL: %w", err)
 	}
-	s.mount, err = mount.Upgrade(mnt, s.d.config.TransientsDir, s.key.String(), "")
+	s.mount, err = mount.Upgrade(mnt, s.d.config.TransientsDir, s.key.String(), ps.TransientPath)
 	if err != nil {
 		return fmt.Errorf("failed to apply mount upgrader: %w", err)
 	}

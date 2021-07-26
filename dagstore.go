@@ -131,8 +131,8 @@ type Config struct {
 	// be created for remote mounts.
 	TransientsDir string
 
-	// IndexDir is the path where indices are stored.
-	IndexDir string
+	// IndexRepo is the full index repo to use.
+	IndexRepo index.FullIndexRepo
 
 	// Datastore is the datastore where shard state will be persisted.
 	Datastore ds.Datastore
@@ -181,19 +181,9 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	// instantiate the index repo.
-	var indices index.FullIndexRepo
-	if cfg.IndexDir == "" {
+	if cfg.IndexRepo == nil {
 		log.Info("using in-memory index store")
-		indices = index.NewMemoryRepo()
-	} else {
-		err := ensureDir(cfg.IndexDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create index root dir: %w", err)
-		}
-		indices, err = index.NewFSRepo(cfg.IndexDir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to instantiate full index repo: %w", err)
-		}
+		cfg.IndexRepo = index.NewMemoryRepo()
 	}
 
 	// handle the datastore.
@@ -213,7 +203,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	dagst := &DAGStore{
 		mounts:            cfg.MountRegistry,
 		config:            cfg,
-		indices:           indices,
+		indices:           cfg.IndexRepo,
 		shards:            make(map[shard.Key]*Shard),
 		store:             cfg.Datastore,
 		externalCh:        make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.

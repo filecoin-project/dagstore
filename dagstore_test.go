@@ -3,10 +3,12 @@ package dagstore
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/dagstore/index"
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/filecoin-project/dagstore/testdata"
@@ -249,15 +251,15 @@ func TestConcurrentAcquires(t *testing.T) {
 }
 
 func TestRestartRestoresState(t *testing.T) {
-	indicesDir := t.TempDir()
-
 	dir := t.TempDir()
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
+	idx, err := index.NewFSRepo(t.TempDir())
+	require.NoError(t, err)
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
 		Datastore:     store,
-		IndexDir:      indicesDir,
+		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
 
@@ -281,7 +283,7 @@ func TestRestartRestoresState(t *testing.T) {
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
 		Datastore:     store,
-		IndexDir:      indicesDir,
+		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
 	info := dagst.AllShardsInfo()
@@ -1036,7 +1038,98 @@ func TestFailingAcquireErrorPropagates(t *testing.T) {
 		require.Contains(t, res.Error.Error(), "invalid header: malformed stream: invalid appearance of bytes token; expected map key")
 		require.Nil(t, res.Accessor)
 	}
+}
 
+func TestTransientReusedOnRestart(t *testing.T) {
+	ds := datastore.NewMapDatastore()
+	dir := t.TempDir()
+	r := testRegistry(t)
+	idx := index.NewMemoryRepo()
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		Datastore:     ds,
+		IndexRepo:     idx,
+	})
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult, 1)
+	k := shard.KeyFromString("foo")
+	err = dagst.RegisterShard(context.Background(), k, carv2mnt, ch, RegisterOpts{})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	// allow some time for fetching and indexing.
+	time.Sleep(1 * time.Second)
+
+	err = dagst.Close()
+	require.NoError(t, err)
+
+	dagst, err = NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		Datastore:     ds,
+		IndexRepo:     idx,
+	})
+	require.NoError(t, err)
+
+	// make sure the transient is populated, and it exists.
+	path := dagst.shards[k].mount.TransientPath()
+	require.NotEmpty(t, path)
+	_, err = os.Stat(path)
+	require.NoError(t, err)
+
+	// acquire the shard.
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+	require.NoError(t, err)
+	res = <-ch
+	require.NoError(t, res.Error)
+	require.NotNil(t, res.Accessor)
+
+	// ensure that the count has not been incremented (i.e. the origin was not accessed)
+	require.Zero(t, dagst.shards[k].mount.TimesFetched())
+}
+
+func TestAcquireFailsWhenIndexGone(t *testing.T) {
+	ds := datastore.NewMapDatastore()
+	dir := t.TempDir()
+	r := testRegistry(t)
+	idx := index.NewMemoryRepo()
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		Datastore:     ds,
+		IndexRepo:     idx,
+	})
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult, 1)
+	k := shard.KeyFromString("foo")
+	err = dagst.RegisterShard(context.Background(), k, carv2mnt, ch, RegisterOpts{})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	// delete all indices from the repo.
+	dropped, err := idx.DropFullIndex(k)
+	require.True(t, dropped)
+	require.NoError(t, err)
+
+	// now try to acquire the shard, it must fail.
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+	require.NoError(t, err)
+	res = <-ch
+	require.Error(t, res.Error)
+	require.Nil(t, res.Accessor)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// check that the shard is now in failed state.
+	info, err := dagst.GetShardInfo(k)
+	require.NoError(t, err)
+	require.Equal(t, ShardStateErrored, info.ShardState)
+	require.Error(t, info.Error)
 }
 
 // TestBlockCallback tests that blocking a callback blocks the dispatcher
