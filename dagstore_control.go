@@ -59,9 +59,10 @@ func (d *DAGStore) control() {
 		}
 
 		s := tsk.shard
-		prevState := s.state
-		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "state", prevState, "error", tsk.err)
+		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
+
 		s.lk.Lock()
+		prevState := s.state
 
 		switch tsk.op {
 		case OpShardRegister:
