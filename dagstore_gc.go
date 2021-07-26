@@ -55,7 +55,8 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 
 	// attempt to delete transients of reclaimed shards.
 	for _, s := range reclaim {
-		s.lk.Lock()
+		// only read lock: we're not modifying state, and the mount has its own lock.
+		s.lk.RLock()
 		err := s.mount.DeleteTransient()
 		if err != nil {
 			log.Warnw("failed to delete transient", "shard", s.key, "error", err)
@@ -68,7 +69,7 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 		if err := s.persist(d.config.Datastore); err != nil {
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 		}
-		s.lk.Unlock()
+		s.lk.RUnlock()
 	}
 
 	// B. Remove files that aren't referenced by the mounts.
