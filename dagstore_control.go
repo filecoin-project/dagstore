@@ -15,7 +15,6 @@ const (
 	OpShardAcquire
 	OpShardFail
 	OpShardRelease
-	OpShardGC
 	OpShardRecover
 )
 
@@ -28,7 +27,6 @@ func (o OpType) String() string {
 		"OpShardAcquire",
 		"OpShardFail",
 		"OpShardRelease",
-		"OpShardGC",
 		"OpShardRecover"}[o]
 }
 
@@ -300,19 +298,6 @@ func (d *DAGStore) control() {
 			delete(d.shards, s.key)
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
-
-		case OpShardGC:
-			var err error
-			if nAcq := len(s.wAcquire); s.state == ShardStateAvailable || s.state == ShardStateErrored || nAcq == 0 {
-				err = s.mount.DeleteTransient()
-				if err != nil {
-					log.Warnw("failed to delete transient", "shard", s.key, "error", err)
-				}
-			} else {
-				err = fmt.Errorf("ignored request to GC shard in state %s with queued acquirers=%d", s.state, nAcq)
-			}
-			res := &ShardResult{Key: s.key, Error: err}
-			d.dispatchResult(res, tsk.waiter)
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
