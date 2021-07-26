@@ -233,6 +233,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		return nil, fmt.Errorf("failed to restore dagstore state: %w", err)
 	}
 
+	if err := dagst.clearOrphaned(); err != nil {
+		log.Warnf("failed to clear orphaned files on startup: %s", err)
+	}
+
 	// Reset in-progress states.
 	//
 	// Queue shards whose registration needs to be restarted. Release those
@@ -472,13 +476,8 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 	return ret
 }
 
-// GC performs DAG store garbage collection.
-//
-// This comprises two steps:
-//  1. Reclaim the transient files of shards that are currently available but
-//  inactive, or errored.
-//  2. Reconciles the transients directory with the mounts, by removing orphaned
-//  files (unreferenced files).
+// GC performs DAG store garbage collection by reclaiming transient files of
+// shards that are currently available but inactive, or errored.
 //
 // GC runs with exclusivity from the event loop.
 func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {

@@ -429,23 +429,6 @@ func TestGC(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// create random files in the transients directory, which we expect the GC
-	// procedure to remove.
-	var orphaned []string
-	for i := 0; i < 100; i++ {
-		file, err := os.CreateTemp(dir, "")
-		require.NoError(t, err)
-		orphaned = append(orphaned, file.Name())
-
-		// write random data
-		n, err := io.Copy(file, io.LimitReader(rand.Reader, 1024))
-		require.NoError(t, err)
-		require.EqualValues(t, 1024, n)
-
-		err = file.Close()
-		require.NoError(t, err)
-	}
-
 	// register 100 shards
 	// acquire 25 with 5 acquirers, release 2 acquirers (refcount 3); non reclaimable
 	// acquire another 25, release them all, they're reclaimable
@@ -473,6 +456,34 @@ func TestGC(t *testing.T) {
 		require.True(t, ok)
 		require.NoError(t, err)
 	}
+}
+
+func TestOrphansRemovedOnStartup(t *testing.T) {
+	dir := t.TempDir()
+
+	// create random files in the transients directory, which we expect the GC
+	// procedure to remove.
+	var orphaned []string
+	for i := 0; i < 100; i++ {
+		file, err := os.CreateTemp(dir, "")
+		require.NoError(t, err)
+		orphaned = append(orphaned, file.Name())
+
+		// write random data
+		n, err := io.Copy(file, io.LimitReader(rand.Reader, 1024))
+		require.NoError(t, err)
+		require.EqualValues(t, 1024, n)
+
+		err = file.Close()
+		require.NoError(t, err)
+	}
+
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+	})
+	require.NoError(t, err)
+	defer dagst.Close()
 
 	// orphaned files are gone
 	for _, p := range orphaned {

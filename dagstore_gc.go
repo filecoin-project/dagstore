@@ -9,14 +9,11 @@ import (
 )
 
 // GCResult is the result of performing a GC operation. It holds the results
-// from deleting unused transients, and the result from reconciling the
-// transients dir with files referenced from mounts.
+// from deleting unused transients.
 type GCResult struct {
 	// Shards includes an entry for every shard whose transient was reclaimed.
 	// Nil error values indicate success.
 	Shards map[shard.Key]error
-	// Reconcile stores the result from the reconciliation phase.
-	Reconcile error
 }
 
 // ShardFailures returns the number of shards whose transient reclaim failed.
@@ -38,8 +35,6 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 	res := &GCResult{
 		Shards: make(map[shard.Key]error),
 	}
-
-	// A. Delete transients for unused and errored shards.
 
 	// determine which shards can be reclaimed.
 	d.lk.RLock()
@@ -72,31 +67,38 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 		s.lk.RUnlock()
 	}
 
-	// B. Remove files that aren't referenced by the mounts.
-
-	referenced := make(map[string]struct{})
-	d.lk.RLock()
-	for _, s := range d.shards {
-		t, p := s.mount.TransientPath(), s.mount.PartialPath()
-		referenced[t] = struct{}{}
-		referenced[p] = struct{}{}
+	select {
+	case resCh <- res:
+	case <-d.ctx.Done():
 	}
-	d.lk.RUnlock()
+}
+
+// clearOrphaned removes files that are not referenced by any mount.
+//
+// This is only safe to be called from the constructor, before we have
+// queued tasks.
+func (d *DAGStore) clearOrphaned() error {
+	referenced := make(map[string]struct{})
+
+	for _, s := range d.shards {
+		t := s.mount.TransientPath()
+		referenced[t] = struct{}{}
+	}
 
 	// Walk the transients dir and delete unreferenced files.
-	res.Reconcile = filepath.WalkDir(d.config.TransientsDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(d.config.TransientsDir, func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
 		if _, ok := referenced[path]; !ok {
 			if err := os.Remove(path); err != nil {
-				log.Warnw("failed to garbage collec file", "path", path, "error", err)
+				log.Warnw("failed to delete orphaned file", "path", path, "error", err)
 			} else {
-				log.Infow("garbage collected file", "path", path)
+				log.Infow("deleted orphaned file", "path", path)
 			}
 		}
 		return nil
 	})
 
-	select {
-	case resCh <- res:
-	case <-d.ctx.Done():
-	}
+	return err
 }
