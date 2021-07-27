@@ -10,6 +10,7 @@ import (
 	"github.com/filecoin-project/dagstore/index"
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
+	"github.com/filecoin-project/dagstore/throttle"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -97,8 +98,8 @@ type DAGStore struct {
 
 	// Throttling.
 	//
-	throttleFetch Throttler
-	throttleIndex Throttler
+	throttleFetch throttle.Throttler
+	throttleIndex throttle.Throttler
 
 	// Lifecycle.
 	//
@@ -164,6 +165,8 @@ type Config struct {
 
 	// MaxConcurrentFetch is the maximum fetching jobs that can
 	// run concurrently. 0 (default) disables throttling.
+	//
+	// Mounts can also have throttling mechanisms.
 	MaxConcurrentFetch int
 
 	// RecoverOnStart specifies whether failed shards should be recovered
@@ -214,18 +217,18 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		gcCh:              make(chan chan *GCResult, 8),
 		traceCh:           cfg.TraceCh,
 		failureCh:         cfg.FailureCh,
-		throttleFetch:     noopThrottler{},
-		throttleIndex:     noopThrottler{},
+		throttleFetch:     throttle.Noop(),
+		throttleIndex:     throttle.Noop(),
 		ctx:               ctx,
 		cancelFn:          cancel,
 	}
 
 	if max := cfg.MaxConcurrentFetch; max > 0 {
-		dagst.throttleFetch = NewThrottler(max)
+		dagst.throttleFetch = throttle.Fixed(max)
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
-		dagst.throttleIndex = NewThrottler(max)
+		dagst.throttleIndex = throttle.Fixed(max)
 	}
 
 	if err := dagst.restoreState(); err != nil {

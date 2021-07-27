@@ -1,4 +1,4 @@
-package dagstore
+package throttle
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestThrottler(t *testing.T) {
-	tt := NewThrottler(5)
+	tt := Fixed(5)
 
 	var cnt int32
 	ch := make(chan struct{}, 16)
