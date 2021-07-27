@@ -1,4 +1,4 @@
-package dagstore
+package throttle
 
 import "context"
 
@@ -18,9 +18,9 @@ type throttler struct {
 	ch chan struct{}
 }
 
-// NewThrottler creates a new throttler that allows the specified concurrency
+// Fixed creates a new throttler that allows the specified fixed concurrency
 // at most.
-func NewThrottler(maxConcurrency int) Throttler {
+func Fixed(maxConcurrency int) Throttler {
 	ch := make(chan struct{}, maxConcurrency)
 	for i := 0; i < maxConcurrency; i++ {
 		ch <- struct{}{}
@@ -36,6 +36,11 @@ func (t *throttler) Do(ctx context.Context, fn func(ctx context.Context) error) 
 	}
 	defer func() { t.ch <- struct{}{} }()
 	return fn(ctx)
+}
+
+// Noop returns a noop throttler.
+func Noop() Throttler {
+	return noopThrottler{}
 }
 
 type noopThrottler struct{}

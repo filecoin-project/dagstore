@@ -3,7 +3,6 @@ module github.com/filecoin-project/dagstore
 go 1.16
 
 require (
-	github.com/hashicorp/go-multierror v1.0.0
 	github.com/ipfs/go-block-format v0.0.3
 	github.com/ipfs/go-cid v0.0.8-0.20210716091050-de6c03deae1c
 	github.com/ipfs/go-datastore v0.4.5
