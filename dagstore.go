@@ -99,6 +99,7 @@ type DAGStore struct {
 	// Throttling.
 	//
 	throttleFetch throttle.Throttler
+	throttleCopy  throttle.Throttler
 	throttleIndex throttle.Throttler
 
 	// Lifecycle.
@@ -169,6 +170,10 @@ type Config struct {
 	// Mounts can also have throttling mechanisms.
 	MaxConcurrentFetch int
 
+	// MaxConcurrentCopies is the maximum copies that can
+	// run concurrently. 0 (default) disables throttling.
+	MaxConcurrentCopies int
+
 	// RecoverOnStart specifies whether failed shards should be recovered
 	// on start.
 	RecoverOnStart RecoverOnStartPolicy
@@ -219,6 +224,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		failureCh:         cfg.FailureCh,
 		throttleFetch:     throttle.Noop(),
 		throttleIndex:     throttle.Noop(),
+		throttleCopy:      throttle.Noop(),
 		ctx:               ctx,
 		cancelFn:          cancel,
 	}
@@ -229,6 +235,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
 		dagst.throttleIndex = throttle.Fixed(max)
+	}
+
+	if max := cfg.MaxConcurrentCopies; max > 0 {
+		dagst.throttleCopy = throttle.Fixed(max)
 	}
 
 	if err := dagst.restoreState(); err != nil {
@@ -338,7 +348,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.config.TransientsDir, key.String(), opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.throttleCopy, d.config.TransientsDir, key.String(), opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err

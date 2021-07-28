@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/filecoin-project/dagstore/testdata"
+	"github.com/filecoin-project/dagstore/throttle"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -107,7 +108,7 @@ func TestUpgrade(t *testing.T) {
 
 			mnt := tcc.createMnt(t, key, rootDir)
 
-			u, err := Upgrade(mnt, rootDir, key, tcc.initial)
+			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial)
 			require.NoError(t, err)
 			require.NotNil(t, u)
 
@@ -139,7 +140,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	key := fmt.Sprintf("%d", rand.Uint64())
 	rootDir := t.TempDir()
-	u, err := Upgrade(mnt, rootDir, key, "")
+	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "")
 	require.NoError(t, err)
 	require.Zero(t, mnt.Count())
 
