@@ -3,12 +3,18 @@ package mount
 import (
 	"bytes"
 	"context"
+	rand2 "crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/rand"
+	"net/url"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/filecoin-project/dagstore/throttle"
@@ -213,4 +219,123 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	require.NoError(t, rd.Close())
 	_, err = os.Stat(u.TransientPath())
 	require.NoError(t, err)
+}
+
+func TestUpgraderCopyThrottle(t *testing.T) {
+	thrt := throttle.Fixed(3) // same throttle for all
+	ctx := context.Background()
+
+	upgraders := make([]*Upgrader, 100)
+	underlyings := make([]*blockingReaderMount, 100)
+	for i := range upgraders {
+		underlyings[i] = &blockingReaderMount{br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
+		u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "")
+		require.NoError(t, err)
+		upgraders[i] = u
+	}
+
+	// take all locks.
+	for _, uu := range underlyings {
+		uu.br.lk.Lock()
+	}
+
+	errgrp, _ := errgroup.WithContext(ctx)
+	for _, u := range upgraders {
+		u := u
+		errgrp.Go(func() error {
+			_, err := u.Fetch(ctx)
+			return err
+		})
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// maximum 3 calls to read across all readers
+	var total int32
+	for _, uu := range underlyings {
+		total += atomic.LoadInt32(&uu.br.reads)
+	}
+
+	require.EqualValues(t, 3, total)
+
+	// release all locks.
+	for _, uu := range underlyings {
+		uu.br.lk.Unlock()
+	}
+
+	require.NoError(t, errgrp.Wait())
+
+	// we expect 200 calls to read across all readers.
+	// 2 per reader: fetching the byte, and the EOF.
+	total = 0
+	for _, uu := range underlyings {
+		total += atomic.LoadInt32(&uu.br.reads)
+	}
+
+	require.EqualValues(t, 200, total) // all accessed
+
+}
+
+type blockingReader struct {
+	r     io.Reader
+	lk    sync.Mutex
+	reads int32
+}
+
+var _ Reader = (*blockingReader)(nil)
+
+func (br *blockingReader) Close() error {
+	return nil
+}
+
+func (br *blockingReader) ReadAt(p []byte, off int64) (n int, err error) {
+	panic("implement me")
+}
+
+func (br *blockingReader) Seek(offset int64, whence int) (int64, error) {
+	panic("implement me")
+}
+
+func (br *blockingReader) Read(b []byte) (n int, err error) {
+	atomic.AddInt32(&br.reads, 1)
+	br.lk.Lock()
+	defer br.lk.Unlock()
+	n, err = br.r.Read(b)
+	return n, err
+}
+
+type blockingReaderMount struct {
+	br *blockingReader
+}
+
+var _ Mount = (*blockingReaderMount)(nil)
+
+func (b *blockingReaderMount) Close() error {
+	return nil
+}
+
+func (b *blockingReaderMount) Fetch(ctx context.Context) (Reader, error) {
+	return b.br, nil
+}
+
+func (b *blockingReaderMount) Info() Info {
+	return Info{
+		Kind:             KindRemote,
+		AccessSequential: true,
+	}
+}
+
+func (b *blockingReaderMount) Stat(ctx context.Context) (Stat, error) {
+	return Stat{
+		Exists: true,
+		Size:   1024,
+	}, nil
+}
+
+func (b *blockingReaderMount) Serialize() *url.URL {
+	panic("implement me")
+}
+
+func (b *blockingReaderMount) Deserialize(url *url.URL) error {
+	panic("implement me")
 }
