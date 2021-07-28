@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/filecoin-project/dagstore/throttle"
 	logging "github.com/ipfs/go-log/v2"
 )
 
@@ -24,6 +25,7 @@ var log = logging.Logger("dagstore/upgrader")
 type Upgrader struct {
 	rootdir     string
 	underlying  Mount
+	throttler   throttle.Throttler
 	key         string
 	passthrough bool
 
@@ -51,12 +53,13 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, rootdir, key string, initial string) (*Upgrader, error) {
+func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string) (*Upgrader, error) {
 	ret := &Upgrader{
 		underlying:   underlying,
 		key:          key,
 		rootdir:      rootdir,
 		once:         new(sync.Once),
+		throttler:    throttler,
 		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
 		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
 	}
@@ -236,7 +239,12 @@ func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	}
 	defer from.Close()
 
-	_, err = io.Copy(into, from)
+	// Throttle the IO copy, this is the costliest operation.
+	err = u.throttler.Do(ctx, func(ctx context.Context) error {
+		_, err = io.Copy(into, from)
+		return err
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to copy underlying mount to transient file: %w", err)
 	}
