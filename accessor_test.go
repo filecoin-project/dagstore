@@ -12,6 +12,7 @@ import (
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/testdata"
+	"github.com/filecoin-project/dagstore/throttle"
 	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/index"
 	"github.com/stretchr/testify/require"
@@ -104,7 +105,7 @@ func TestMmap(t *testing.T) {
 		tempdir := t.TempDir()
 
 		var err error
-		mnt, err = mount.Upgrade(mnt, tempdir, "foo", "")
+		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "")
 		require.NoError(t, err)
 
 		// warm up the upgrader so a transient is created, and we can obtain
