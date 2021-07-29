@@ -243,20 +243,20 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dagst.throttleCopy = throttle.Fixed(max)
 	}
 
-	if err := dagst.restoreState(); err != nil {
-		// TODO add a lenient mode.
-		return nil, fmt.Errorf("failed to restore dagstore state: %w", err)
-	}
-
-	if err := dagst.clearOrphaned(); err != nil {
-		log.Warnf("failed to clear orphaned files on startup: %s", err)
-	}
-
 	return dagst, nil
 }
 
 // Start starts a DAG store.
 func (d *DAGStore) Start(ctx context.Context) error {
+	if err := d.restoreState(); err != nil {
+		// TODO add a lenient mode.
+		return fmt.Errorf("failed to restore dagstore state: %w", err)
+	}
+
+	if err := d.clearOrphaned(); err != nil {
+		log.Warnf("failed to clear orphaned files on startup: %s", err)
+	}
+
 	// Reset in-progress states.
 	//
 	// Queue shards whose registration needs to be restarted. Release those
