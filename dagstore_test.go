@@ -40,6 +40,9 @@ func TestRegisterUsingExistingTransient(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	// even though the fs mount has an empty path, the existing transient will get us through registration.
@@ -62,6 +65,9 @@ func TestRegisterWithaNilResponseChannel(t *testing.T) {
 		TransientsDir: t.TempDir(),
 		Datastore:     ds,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	k := shard.KeyFromString("foo")
@@ -96,6 +102,9 @@ func TestRegisterCarV1(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV1}, ch, RegisterOpts{})
@@ -125,6 +134,9 @@ func TestRegisterCarV2(t *testing.T) {
 		TransientsDir: t.TempDir(),
 		Datastore:     datastore.NewMapDatastore(),
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	ch := make(chan ShardResult, 1)
@@ -158,6 +170,9 @@ func TestRegisterConcurrentShards(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		err = dagst.Start(context.Background())
+		require.NoError(t, err)
+
 		registerShards(t, dagst, n, carv2mnt, RegisterOpts{})
 	}
 
@@ -180,6 +195,9 @@ func TestAcquireInexistentShard(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
@@ -192,6 +210,9 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 		TransientsDir: t.TempDir(),
 		Datastore:     datastore.NewMapDatastore(),
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	ch := make(chan ShardResult, 1)
@@ -218,6 +239,9 @@ func TestConcurrentAcquires(t *testing.T) {
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	ch := make(chan ShardResult, 1)
@@ -265,6 +289,9 @@ func TestRestartRestoresState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	keys := registerShards(t, dagst, 100, carv2mnt, RegisterOpts{})
 	for _, k := range keys[0:20] { // acquire the first 20 keys.
 		_ = acquireShard(t, dagst, k, 4)
@@ -288,6 +315,10 @@ func TestRestartRestoresState(t *testing.T) {
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	info := dagst.AllShardsInfo()
 	require.Len(t, info, 100)
 
@@ -326,6 +357,9 @@ func TestRestartResumesRegistration(t *testing.T) {
 		Datastore:     store,
 		TraceCh:       sink,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	// start registering a shard -> registration will not complete as mount.Fetch will hang.
@@ -381,6 +415,9 @@ func TestRestartResumesRegistration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	// this time we will receive three traces; OpShardInitialize, and OpShardMakeAvailable.
 	n, timedOut = sink.Read(traces, 1*time.Second)
 	require.Equal(t, 3, n)
@@ -427,6 +464,9 @@ func TestGC(t *testing.T) {
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	// register 100 shards
@@ -485,6 +525,9 @@ func TestOrphansRemovedOnStartup(t *testing.T) {
 	require.NoError(t, err)
 	defer dagst.Close()
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	// orphaned files are gone
 	for _, p := range orphaned {
 		_, err := os.Stat(p)
@@ -504,6 +547,9 @@ func TestLazyInitialization(t *testing.T) {
 		Datastore:     store,
 		TraceCh:       sink,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	ch := make(chan ShardResult, 1)
@@ -554,6 +600,9 @@ func TestThrottleFetch(t *testing.T) {
 		MaxConcurrentFetch: 5,
 		MaxConcurrentIndex: 5,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	// register 16 shards with lazy init, against the blocking mount.
@@ -614,6 +663,9 @@ func TestIndexingFailure(t *testing.T) {
 		TraceCh:       sink,
 		FailureCh:     failures,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	// register 16 shards with junk in them, so they will fail indexing.
@@ -822,6 +874,9 @@ func TestFailureRecovery(t *testing.T) {
 	go RecoverImmediately(context.Background(), dagst, failures, 10, nil) // 10 max attempts.
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	// register 16 shards with junk in them, so they will fail indexing.
 	resCh := make(chan ShardResult, 16)
 	junkmnt := *junkmnt // take a copy
@@ -873,6 +928,9 @@ func TestRecoveryOnStart(t *testing.T) {
 	dagst, err := NewDAGStore(config)
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	// register 16 shards with junk in them, so they will fail indexing.
 	resCh := make(chan ShardResult, 16)
 	junkmnt := *junkmnt // take a copy
@@ -905,6 +963,9 @@ func TestRecoveryOnStart(t *testing.T) {
 		dagst, err = NewDAGStore(config)
 		require.NoError(t, err)
 
+		err = dagst.Start(context.Background())
+		require.NoError(t, err)
+
 		// no events.
 		evts := make([]Trace, 16)
 		n, timedOut := sink.Read(evts, 1*time.Second)
@@ -923,6 +984,9 @@ func TestRecoveryOnStart(t *testing.T) {
 	t.Run("RecoverNow", func(t *testing.T) {
 		config.RecoverOnStart = RecoverNow
 		dagst, err = NewDAGStore(config)
+		require.NoError(t, err)
+
+		err = dagst.Start(context.Background())
 		require.NoError(t, err)
 
 		// 32 events: recovery and failure.
@@ -950,6 +1014,9 @@ func TestRecoveryOnStart(t *testing.T) {
 	t.Run("RecoverOnAcquire", func(t *testing.T) {
 		config.RecoverOnStart = RecoverOnAcquire
 		dagst, err = NewDAGStore(config)
+		require.NoError(t, err)
+
+		err = dagst.Start(context.Background())
 		require.NoError(t, err)
 
 		// 0 events.
@@ -1035,6 +1102,9 @@ func TestFailingAcquireErrorPropagates(t *testing.T) {
 	dagst, err := NewDAGStore(config)
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	// create a junk mount and front it with a blocking mount.
 	junkmnt := *junkmnt
 	mnt := newBlockingMount(&junkmnt)
@@ -1086,6 +1156,9 @@ func TestTransientReusedOnRestart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
 	ch := make(chan ShardResult, 1)
 	k := shard.KeyFromString("foo")
 	err = dagst.RegisterShard(context.Background(), k, carv2mnt, ch, RegisterOpts{})
@@ -1105,6 +1178,9 @@ func TestTransientReusedOnRestart(t *testing.T) {
 		Datastore:     ds,
 		IndexRepo:     idx,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	// make sure the transient is populated, and it exists.
@@ -1135,6 +1211,9 @@ func TestAcquireFailsWhenIndexGone(t *testing.T) {
 		Datastore:     ds,
 		IndexRepo:     idx,
 	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
 	ch := make(chan ShardResult, 1)
