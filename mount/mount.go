@@ -111,6 +111,9 @@ type Stat struct {
 	Exists bool
 	// Size is the size of the asset referred to by this Mount.
 	Size int64
+	// Ready indicates whether the mount can serve the resource immediately, or
+	// if it needs to do work prior to serving it.
+	Ready bool
 }
 
 type NopCloser struct {
