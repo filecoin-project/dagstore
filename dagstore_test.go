@@ -597,8 +597,8 @@ func TestThrottleFetch(t *testing.T) {
 		TransientsDir: dir,
 		TraceCh:       sink,
 
-		MaxConcurrentFetch: 5,
-		MaxConcurrentIndex: 5,
+		MaxConcurrentReadyFetches: 5,
+		MaxConcurrentIndex:        5,
 	})
 	require.NoError(t, err)
 
@@ -608,6 +608,7 @@ func TestThrottleFetch(t *testing.T) {
 	// register 16 shards with lazy init, against the blocking mount.
 	// we don't register with eager, because we would block due to the throttle.
 	mnt := newBlockingMount(carv2mnt)
+	mnt.ready = true
 	cnt := &mount.Counting{Mount: mnt}
 	resCh := make(chan ShardResult, 16)
 	for i := 0; i < 16; i++ {
@@ -1392,6 +1393,7 @@ func (m Tracer) Read(dst []Trace, timeout time.Duration) (n int, timedOut bool) 
 type blockingMount struct {
 	mount.Mount
 	UnblockCh chan struct{} // exported so that it is a templated field for mounts that were restored after a restart.
+	ready     bool
 }
 
 func newBlockingMount(mnt mount.Mount) *blockingMount {
@@ -1410,4 +1412,13 @@ func (b *blockingMount) UnblockNext(n int) {
 func (b *blockingMount) Fetch(ctx context.Context) (mount.Reader, error) {
 	<-b.UnblockCh
 	return b.Mount.Fetch(ctx)
+}
+
+func (b *blockingMount) Stat(ctx context.Context) (mount.Stat, error) {
+	s, err := b.Mount.Stat(ctx)
+	if err != nil {
+		return s, err
+	}
+	s.Ready = b.ready
+	return s, err
 }

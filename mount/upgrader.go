@@ -131,6 +131,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		// perform outside the lock as this is a long-running operation.
 		// u.onceErr is only written by the goroutine that gets to run sync.Once
 		// and it's only read after it finishes.
+
 		u.onceErr = u.refetch(ctx, partial)
 		if u.onceErr != nil {
 			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
@@ -226,27 +227,37 @@ func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	log.Debugw("actually refetching", "shard", u.key, "path", into.Name())
 
 	// sanity check on underlying mount.
-	if stat, err := u.underlying.Stat(ctx); err != nil {
+	stat, err := u.underlying.Stat(ctx)
+	if err != nil {
 		return fmt.Errorf("underlying mount stat returned error: %w", err)
 	} else if !stat.Exists {
 		return fmt.Errorf("underlying mount no longer exists")
 	}
 
-	// fetch from underlying and copy.
-	from, err := u.underlying.Fetch(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch from underlying mount: %w", err)
+	// throttle only if the file is ready; if it's not ready, we would be
+	// throttling and then idling.
+	t := u.throttler
+	if !stat.Ready {
+		log.Debugw("underlying mount is not ready; will skip throttling", "shard", u.key)
+		t = throttle.Noop()
+	} else {
+		log.Debugw("underlying mount is ready; will throttle fetch and copy", "shard", u.key)
 	}
-	defer from.Close()
 
-	// Throttle the IO copy, this is the costliest operation.
-	err = u.throttler.Do(ctx, func(ctx context.Context) error {
+	err = t.Do(ctx, func(ctx context.Context) error {
+		// fetch from underlying and copy.
+		from, err := u.underlying.Fetch(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to fetch from underlying mount: %w", err)
+		}
+		defer from.Close()
+
 		_, err = io.Copy(into, from)
 		return err
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to copy underlying mount to transient file: %w", err)
+		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
 	}
 
 	return nil
