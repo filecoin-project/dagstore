@@ -583,6 +583,76 @@ func TestLazyInitialization(t *testing.T) {
 	require.EqualValues(t, 16, info.refs)
 }
 
+// TestThrottleFetch exercises and tests the fetch concurrency limitation.
+// Testing thottling on indexing is way harder...
+func TestThrottleFetch(t *testing.T) {
+	r := testRegistry(t)
+	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	sink := tracer(128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: dir,
+		TraceCh:       sink,
+
+		MaxConcurrentReadyFetches: 5,
+		MaxConcurrentIndex:        5,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	// register 16 shards with lazy init, against the blocking mount.
+	// we don't register with eager, because we would block due to the throttle.
+	mnt := newBlockingMount(carv2mnt)
+	mnt.ready = true
+	cnt := &mount.Counting{Mount: mnt}
+	resCh := make(chan ShardResult, 16)
+	for i := 0; i < 16; i++ {
+		k := shard.KeyFromString(strconv.Itoa(i))
+		err := dagst.RegisterShard(context.Background(), k, cnt, resCh, RegisterOpts{})
+		require.NoError(t, err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	info := dagst.AllShardsInfo()
+	require.Len(t, info, 16)
+	for _, i := range info {
+		require.Equal(t, ShardStateInitializing, i.ShardState)
+	}
+
+	// no responses received.
+	require.Len(t, resCh, 0)
+
+	// mount was called 5 times only.
+	require.EqualValues(t, 5, cnt.Count())
+
+	// allow 5 to proceed; those will be initialized an the next 5 will block.
+	mnt.UnblockNext(5)
+	time.Sleep(500 * time.Millisecond)
+
+	// five responses received.
+	require.Len(t, resCh, 5)
+
+	// mount was called another 5 times.
+	require.EqualValues(t, 10, cnt.Count())
+
+	info = dagst.AllShardsInfo()
+	require.Len(t, info, 16)
+
+	m := map[ShardState][]shard.Key{}
+	for k, i := range info {
+		m[i.ShardState] = append(m[i.ShardState], k)
+	}
+	require.Len(t, m, 2) // only two shard states.
+	require.Len(t, m[ShardStateInitializing], 16-5)
+	require.Len(t, m[ShardStateAvailable], 5)
+}
+
 func TestIndexingFailure(t *testing.T) {
 	r := testRegistry(t)
 	dir := t.TempDir()
@@ -1323,6 +1393,7 @@ func (m Tracer) Read(dst []Trace, timeout time.Duration) (n int, timedOut bool) 
 type blockingMount struct {
 	mount.Mount
 	UnblockCh chan struct{} // exported so that it is a templated field for mounts that were restored after a restart.
+	ready     bool
 }
 
 func newBlockingMount(mnt mount.Mount) *blockingMount {
@@ -1341,4 +1412,13 @@ func (b *blockingMount) UnblockNext(n int) {
 func (b *blockingMount) Fetch(ctx context.Context) (mount.Reader, error) {
 	<-b.UnblockCh
 	return b.Mount.Fetch(ctx)
+}
+
+func (b *blockingMount) Stat(ctx context.Context) (mount.Stat, error) {
+	s, err := b.Mount.Stat(ctx)
+	if err != nil {
+		return s, err
+	}
+	s.Ready = b.ready
+	return s, err
 }

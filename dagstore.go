@@ -98,8 +98,8 @@ type DAGStore struct {
 
 	// Throttling.
 	//
-	throttleFetchCopy throttle.Throttler
-	throttleIndex     throttle.Throttler
+	throttleReaadyFetch throttle.Throttler
+	throttleIndex       throttle.Throttler
 
 	// Lifecycle.
 	//
@@ -163,9 +163,10 @@ type Config struct {
 	// run concurrently. 0 (default) disables throttling.
 	MaxConcurrentIndex int
 
-	// MaxConcurrentCopies is the maximum copies that can
-	// run concurrently. 0 (default) disables throttling.
-	MaxConcurrentCopies int
+	// MaxConcurrentReadyFetches is the maximum number of fetches that will
+	// run concurrently for mounts that are reporting themselves as ready for
+	// immediate fetch. 0 (default) disables throttling.
+	MaxConcurrentReadyFetches int
 
 	// RecoverOnStart specifies whether failed shards should be recovered
 	// on start.
@@ -205,30 +206,30 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	dagst := &DAGStore{
-		mounts:            cfg.MountRegistry,
-		config:            cfg,
-		indices:           cfg.IndexRepo,
-		shards:            make(map[shard.Key]*Shard),
-		store:             cfg.Datastore,
-		externalCh:        make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
-		internalCh:        make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
-		completionCh:      make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
-		dispatchResultsCh: make(chan *dispatch, 128), // len=128, same as externalCh.
-		gcCh:              make(chan chan *GCResult, 8),
-		traceCh:           cfg.TraceCh,
-		failureCh:         cfg.FailureCh,
-		throttleIndex:     throttle.Noop(),
-		throttleFetchCopy: throttle.Noop(),
-		ctx:               ctx,
-		cancelFn:          cancel,
+		mounts:              cfg.MountRegistry,
+		config:              cfg,
+		indices:             cfg.IndexRepo,
+		shards:              make(map[shard.Key]*Shard),
+		store:               cfg.Datastore,
+		externalCh:          make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
+		internalCh:          make(chan *task, 1),       // len=1, because eventloop will only ever stage another internal event.
+		completionCh:        make(chan *task, 64),      // len=64, hitting this limit will just make async tasks wait.
+		dispatchResultsCh:   make(chan *dispatch, 128), // len=128, same as externalCh.
+		gcCh:                make(chan chan *GCResult, 8),
+		traceCh:             cfg.TraceCh,
+		failureCh:           cfg.FailureCh,
+		throttleIndex:       throttle.Noop(),
+		throttleReaadyFetch: throttle.Noop(),
+		ctx:                 ctx,
+		cancelFn:            cancel,
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
 		dagst.throttleIndex = throttle.Fixed(max)
 	}
 
-	if max := cfg.MaxConcurrentCopies; max > 0 {
-		dagst.throttleFetchCopy = throttle.Fixed(max)
+	if max := cfg.MaxConcurrentReadyFetches; max > 0 {
+		dagst.throttleReaadyFetch = throttle.Fixed(max)
 	}
 
 	return dagst, nil
@@ -343,7 +344,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.throttleFetchCopy, d.config.TransientsDir, key.String(), opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err
