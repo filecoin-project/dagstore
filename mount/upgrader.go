@@ -238,7 +238,10 @@ func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	// throttling and then idling.
 	t := u.throttler
 	if !stat.Ready {
+		log.Debugw("underlying mount is not ready, will skip throttling", "shard", u.key)
 		t = throttle.Noop()
+	} else {
+		log.Debugw("underlying mount is ready, will throttle the fetch and copy operation", "shard", u.key)
 	}
 
 	err = t.Do(ctx, func(ctx context.Context) error {
@@ -254,7 +257,7 @@ func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to copy underlying mount to transient file: %w", err)
+		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
 	}
 
 	return nil

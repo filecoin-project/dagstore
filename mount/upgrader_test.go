@@ -221,59 +221,79 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestUpgraderCopyThrottle(t *testing.T) {
-	thrt := throttle.Fixed(3) // same throttle for all
-	ctx := context.Background()
+func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
+	 nFixedThrottle := 3
 
-	upgraders := make([]*Upgrader, 100)
-	underlyings := make([]*blockingReaderMount, 100)
-	for i := range upgraders {
-		underlyings[i] = &blockingReaderMount{br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
-		u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "")
-		require.NoError(t, err)
-		upgraders[i] = u
+	tcs := map[string]struct{
+		ready bool
+		expectedThrottledReads int
+	}{
+		"no throttling when mount is not ready":{
+			ready: false,
+			expectedThrottledReads: 100,
+		},
+		"throttle when mount is ready":{
+			ready: true,
+			expectedThrottledReads: nFixedThrottle,
+		},
 	}
 
-	// take all locks.
-	for _, uu := range underlyings {
-		uu.br.lk.Lock()
-	}
+	for name, tc := range tcs {
+		t.Run(name, func(t *testing.T) {
+			thrt := throttle.Fixed(nFixedThrottle) // same throttle for all
+			ctx := context.Background()
 
-	errgrp, _ := errgroup.WithContext(ctx)
-	for _, u := range upgraders {
-		u := u
-		errgrp.Go(func() error {
-			_, err := u.Fetch(ctx)
-			return err
+			upgraders := make([]*Upgrader, 100)
+
+			underlyings := make([]*blockingReaderMount, 100)
+			for i := range upgraders {
+				underlyings[i] = &blockingReaderMount{isReady:tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
+				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "")
+				require.NoError(t, err)
+				upgraders[i] = u
+			}
+
+			// take all locks.
+			for _, uu := range underlyings {
+				uu.br.lk.Lock()
+			}
+
+			errgrp, _ := errgroup.WithContext(ctx)
+			for _, u := range upgraders {
+				u := u
+				errgrp.Go(func() error {
+					_, err := u.Fetch(ctx)
+					return err
+				})
+			}
+
+			time.Sleep(500 * time.Millisecond)
+
+			// calls to read across all readers are made without throttling.
+			var total int32
+			for _, uu := range underlyings {
+				total += atomic.LoadInt32(&uu.br.reads)
+			}
+
+			require.EqualValues(t, tc.expectedThrottledReads, total)
+
+			// release all locks.
+			for _, uu := range underlyings {
+				uu.br.lk.Unlock()
+			}
+
+			require.NoError(t, errgrp.Wait())
+
+			// we expect 200 calls to read across all readers.
+			// 2 per reader: fetching the byte, and the EOF.
+			total = 0
+			for _, uu := range underlyings {
+				total += atomic.LoadInt32(&uu.br.reads)
+			}
+
+			require.EqualValues(t, 200, total) // all accessed
 		})
 	}
-
-	time.Sleep(500 * time.Millisecond)
-
-	// maximum 3 calls to read across all readers
-	var total int32
-	for _, uu := range underlyings {
-		total += atomic.LoadInt32(&uu.br.reads)
-	}
-
-	require.EqualValues(t, 3, total)
-
-	// release all locks.
-	for _, uu := range underlyings {
-		uu.br.lk.Unlock()
-	}
-
-	require.NoError(t, errgrp.Wait())
-
-	// we expect 200 calls to read across all readers.
-	// 2 per reader: fetching the byte, and the EOF.
-	total = 0
-	for _, uu := range underlyings {
-		total += atomic.LoadInt32(&uu.br.reads)
-	}
-
-	require.EqualValues(t, 200, total) // all accessed
-
 }
 
 type blockingReader struct {
@@ -305,6 +325,7 @@ func (br *blockingReader) Read(b []byte) (n int, err error) {
 }
 
 type blockingReaderMount struct {
+	isReady bool
 	br *blockingReader
 }
 
@@ -329,6 +350,7 @@ func (b *blockingReaderMount) Stat(ctx context.Context) (Stat, error) {
 	return Stat{
 		Exists: true,
 		Size:   1024,
+		Ready: b.isReady,
 	}, nil
 }
 
