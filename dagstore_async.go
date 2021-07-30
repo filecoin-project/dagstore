@@ -20,6 +20,8 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
+		log.Warnw("acquire: failed to fetch from mount upgrader", "shard", s.key, "error", err)
+
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
@@ -30,6 +32,8 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
+
+	log.Debugw("acquire: successfully fetched from mount upgrader", "shard", s.key)
 
 	idx, err := d.indices.GetFullIndex(k)
 	if err != nil {
@@ -61,9 +65,13 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Mount) {
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
+		log.Warnw("initialize: failed to fetch from mount upgrader", "shard", s.key, "error", err)
+
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
 		return
 	}
+
+	log.Debugw("initialize: successfully fetched from mount upgrader", "shard", s.key)
 	defer reader.Close()
 
 	// works for both CARv1 and CARv2.
