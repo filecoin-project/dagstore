@@ -98,9 +98,8 @@ type DAGStore struct {
 
 	// Throttling.
 	//
-	throttleFetch throttle.Throttler
-	throttleCopy  throttle.Throttler
-	throttleIndex throttle.Throttler
+	throttleFetchCopy throttle.Throttler
+	throttleIndex     throttle.Throttler
 
 	// Lifecycle.
 	//
@@ -164,12 +163,6 @@ type Config struct {
 	// run concurrently. 0 (default) disables throttling.
 	MaxConcurrentIndex int
 
-	// MaxConcurrentFetch is the maximum fetching jobs that can
-	// run concurrently. 0 (default) disables throttling.
-	//
-	// Mounts can also have throttling mechanisms.
-	MaxConcurrentFetch int
-
 	// MaxConcurrentCopies is the maximum copies that can
 	// run concurrently. 0 (default) disables throttling.
 	MaxConcurrentCopies int
@@ -224,15 +217,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		gcCh:              make(chan chan *GCResult, 8),
 		traceCh:           cfg.TraceCh,
 		failureCh:         cfg.FailureCh,
-		throttleFetch:     throttle.Noop(),
 		throttleIndex:     throttle.Noop(),
-		throttleCopy:      throttle.Noop(),
+		throttleFetchCopy: throttle.Noop(),
 		ctx:               ctx,
 		cancelFn:          cancel,
-	}
-
-	if max := cfg.MaxConcurrentFetch; max > 0 {
-		dagst.throttleFetch = throttle.Fixed(max)
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
@@ -240,7 +228,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	if max := cfg.MaxConcurrentCopies; max > 0 {
-		dagst.throttleCopy = throttle.Fixed(max)
+		dagst.throttleFetchCopy = throttle.Fixed(max)
 	}
 
 	return dagst, nil
@@ -355,7 +343,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.throttleCopy, d.config.TransientsDir, key.String(), opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.throttleFetchCopy, d.config.TransientsDir, key.String(), opts.ExistingTransient)
 	if err != nil {
 		d.lk.Unlock()
 		return err

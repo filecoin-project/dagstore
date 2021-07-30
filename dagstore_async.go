@@ -18,18 +18,7 @@ import (
 func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
 	k := s.key
 
-	var reader mount.Reader
-	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
-		var err error
-		reader, err = mnt.Fetch(ctx)
-		if err == nil {
-			log.Debugw("acquire: successfully fetched from mount upgrader", "shard", s.key)
-		} else {
-			log.Warnw("acquire: failed to fetch from mount upgrader", "shard", s.key, "error", err)
-		}
-		return err
-	})
-
+	reader, err := mnt.Fetch(ctx)
 	if err != nil {
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
@@ -70,18 +59,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 // initializeShard initializes a shard asynchronously by fetching its data and
 // performing indexing.
 func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Mount) {
-	var reader mount.Reader
-	err := d.throttleFetch.Do(ctx, func(ctx context.Context) error {
-		var err error
-		reader, err = mnt.Fetch(ctx)
-		if err == nil {
-			log.Debugw("initialize: successfully fetched from mount upgrader", "shard", s.key)
-		} else {
-			log.Warnw("initialize: failed to fetch from mount upgrader", "shard", s.key, "error", err)
-		}
-		return err
-	})
-
+	reader, err := mnt.Fetch(ctx)
 	if err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
 		return
