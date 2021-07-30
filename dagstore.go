@@ -180,6 +180,8 @@ type Config struct {
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
+//
+// You must call Start for processing to begin.
 func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// validate and manage scratch root directory.
 	if cfg.TransientsDir == "" {
@@ -241,12 +243,17 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dagst.throttleCopy = throttle.Fixed(max)
 	}
 
-	if err := dagst.restoreState(); err != nil {
+	return dagst, nil
+}
+
+// Start starts a DAG store.
+func (d *DAGStore) Start(ctx context.Context) error {
+	if err := d.restoreState(); err != nil {
 		// TODO add a lenient mode.
-		return nil, fmt.Errorf("failed to restore dagstore state: %w", err)
+		return fmt.Errorf("failed to restore dagstore state: %w", err)
 	}
 
-	if err := dagst.clearOrphaned(); err != nil {
+	if err := d.clearOrphaned(); err != nil {
 		log.Warnf("failed to clear orphaned files on startup: %s", err)
 	}
 
@@ -257,10 +264,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// in this state than the externalCh buffer size would exceed the channel
 	// buffer, and we'd block forever.
 	var toRegister, toRecover []*Shard
-	for _, s := range dagst.shards {
+	for _, s := range d.shards {
 		switch s.state {
 		case ShardStateErrored:
-			switch cfg.RecoverOnStart {
+			switch d.config.RecoverOnStart {
 			case DoNotRecover:
 				log.Infow("start: skipping recovery of shard in errored state", "shard", s.key, "error", s.err)
 			case RecoverOnAcquire:
@@ -280,7 +287,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		case ShardStateInitializing:
 			// handle shards that were initializing when we shut down.
 			// if we already have the index for the shard, there's nothing else to do.
-			if istat, err := dagst.indices.StatFullIndex(s.key); err == nil && istat.Exists {
+			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
 				// reset back to new, and queue the OpShardRegister.
@@ -291,32 +298,32 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	// spawn the control goroutine.
-	dagst.wg.Add(1)
-	go dagst.control()
+	d.wg.Add(1)
+	go d.control()
 
 	// spawn the dispatcher goroutine for responses, responsible for pumping
 	// async results back to the caller.
-	dagst.wg.Add(1)
-	go dagst.dispatcher(dagst.dispatchResultsCh)
+	d.wg.Add(1)
+	go d.dispatcher(d.dispatchResultsCh)
 
 	// application has provided a failure channel; spawn the dispatcher.
-	if dagst.failureCh != nil {
-		dagst.dispatchFailuresCh = make(chan *dispatch, 128) // len=128, same as externalCh.
-		dagst.wg.Add(1)
-		go dagst.dispatcher(dagst.dispatchFailuresCh)
+	if d.failureCh != nil {
+		d.dispatchFailuresCh = make(chan *dispatch, 128) // len=128, same as externalCh.
+		d.wg.Add(1)
+		go d.dispatcher(d.dispatchFailuresCh)
 	}
 
 	// release the queued registrations before we return.
 	for _, s := range toRegister {
-		_ = dagst.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+		_ = d.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
 	}
 
 	// queue shard recovery for shards in the errored state before we return.
 	for _, s := range toRecover {
-		_ = dagst.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, dagst.externalCh)
+		_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
 	}
 
-	return dagst, nil
+	return nil
 }
 
 type RegisterOpts struct {
