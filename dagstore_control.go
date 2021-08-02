@@ -47,6 +47,8 @@ func (d *DAGStore) control() {
 			if err == context.Canceled {
 				log.Infow("dagstore closed")
 			} else {
+				// vyzo: will a user actually see this? maybe it is appropraite to panic here instead
+				//       of leaving a dangling process that can't make progress.
 				log.Errorw("consuming next task failed; aborted event loop; dagstore unoperational", "error", err)
 			}
 			return
@@ -61,6 +63,13 @@ func (d *DAGStore) control() {
 		s := tsk.shard
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
 
+		// vyzo: this lock is very long-lived; I would make the following logic a method
+		//       and lock/defer unlock in there.
+		//       Extending this with regards to the queueTask dance (and the swallowed errors)
+		//       I think that the code would be much cleaner if the the task processing
+		//       is abstracted in a method that returns optionally a next task (for avoiding the
+		//       internalCh indirection) and an error to break the loop.
+		//       This will also allow us to remove the huge lock scope without defer smell.
 		s.lk.Lock()
 		prevState := s.state
 
@@ -86,6 +95,11 @@ func (d *DAGStore) control() {
 
 			// otherwise, park the registration channel and queue the init.
 			s.wRegister = tsk.waiter
+			// vyzo: why is the error swallowed? shouldn't we catch+log+exit if this fails?
+			//       also, note: I don't like the bit with having an internalCh here, as it is error prone.
+			//       the code is fine with the way it processes the internal channel, but it would be
+			//       much simpler to make this a method that returns the next event instead of going
+			//       through a channel.
 			_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: tsk.waiter}, d.internalCh)
 
 		case OpShardInitialize:
@@ -94,6 +108,7 @@ func (d *DAGStore) control() {
 			// if we already have the index for this shard, there's nothing to do here.
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				log.Debugw("already have an index for shard being initialized, nothing to do", "shard", s.key)
+				// vyzo: same here, swallowed error, internalCh
 				_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.internalCh)
 				break
 			}
@@ -147,6 +162,7 @@ func (d *DAGStore) control() {
 					// to avoid the first context cancellation interrupting the
 					// recovery that may be blocking other acquirers with longer
 					// contexts.
+					// vyzo: swallowed error, internalCh
 					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
 				} else {
 					err := fmt.Errorf("shard is in errored state; err: %w", s.err)
@@ -171,6 +187,7 @@ func (d *DAGStore) control() {
 					// if the first one cancels, the entire job would be cancelled.
 					w := *tsk.waiter
 					w.ctx = context.Background()
+					// vyzo: swallowed error, internalCh
 					_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: &w}, d.internalCh)
 				}
 
@@ -252,6 +269,7 @@ func (d *DAGStore) control() {
 				res := &ShardResult{Key: s.key, Error: s.err}
 				d.dispatchFailuresCh <- &dispatch{res: res, w: wFailure}
 			}
+			// vyzo: log it if not, this swallowed here and it has to at least be in the logs.
 
 		case OpShardRecover:
 			if s.state != ShardStateErrored {
@@ -274,12 +292,14 @@ func (d *DAGStore) control() {
 			// transient to "" always.
 			if err := s.mount.DeleteTransient(); err != nil {
 				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
+				// vyzo: is it safe to proceed if this happens? should we break?
 			}
 
 			// attempt to drop the index.
 			dropped, err := d.indices.DropFullIndex(s.key)
 			if err != nil {
 				log.Warnw("recovery: failed to drop index for shard", "shard", s.key, "error", err)
+				// vyzo: is it safe to initialize if this happens? should we break?
 			} else if !dropped {
 				log.Debugw("recovery: no index dropped for shard", "shard", s.key)
 			}
@@ -299,6 +319,7 @@ func (d *DAGStore) control() {
 			delete(d.shards, s.key)
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
+			// vyzo: no, doesn't look like it by reading this code.
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))

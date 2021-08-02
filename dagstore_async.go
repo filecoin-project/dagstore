@@ -23,9 +23,11 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		log.Warnw("acquire: failed to fetch from mount upgrader", "shard", s.key, "error", err)
 
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		// vyzo: swallowed error
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
+		// vyzo: swallowed error
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount so we can return the accessor: %w", err)
 
 		// send the shard error to the caller.
@@ -43,9 +45,11 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		}
 
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		// vyzo: swallowed error
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
+		// vyzo: swallowed error
 		_ = d.failShard(s, d.completionCh, "failed to recover index for shard %s: %w", k, err)
 
 		// send the shard error to the caller.
@@ -95,5 +99,6 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 		return
 	}
 
+	// vyzo: swallowed error
 	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
 }

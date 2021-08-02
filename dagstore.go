@@ -35,6 +35,8 @@ const (
 	// RecoverOnAcquire will automatically queue a recovery for a failed shard
 	// on the first acquire attempt, and will park that acquire while recovery
 	// is in progress.
+	// vyzo: I would call this RecoverLazy because that's the standard terminology
+	//       for this mode of operation.
 	RecoverOnAcquire
 
 	// RecoverNow will eagerly trigger a recovery for all failed shards
@@ -258,6 +260,7 @@ func (d *DAGStore) Start(ctx context.Context) error {
 		case ShardStateErrored:
 			switch d.config.RecoverOnStart {
 			case DoNotRecover:
+				// vyzo: warn this
 				log.Infow("start: skipping recovery of shard in errored state", "shard", s.key, "error", s.err)
 			case RecoverOnAcquire:
 				log.Infow("start: failed shard will recover on next acquire", "shard", s.key, "error", s.err)
@@ -490,6 +493,9 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 //
 // GC runs with exclusivity from the event loop.
 func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
+	// vyzo: this needs to be buffered with len=1 so that GC can send a response back without blocking
+	//       Note: upon reading the GC code, it also short-circuits on a (presumably the same) context.
+	//       But still making this buffered would not have me guessing and having to read the code for gc.
 	ch := make(chan *GCResult)
 	select {
 	case d.gcCh <- ch:
@@ -500,6 +506,7 @@ func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
 	select {
 	case res := <-ch:
 		return res, nil
+		// vyzo: here we can short-circuit the receive, hence the channel should be buffered.
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -512,6 +519,7 @@ func (d *DAGStore) Close() error {
 	return nil
 }
 
+// vyzo:  _en_queueTask or pushTask is the standard terminology; just queue is not a verb :)
 func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
 	select {
 	case <-d.ctx.Done():
@@ -539,6 +547,10 @@ func (d *DAGStore) restoreState() error {
 
 		log.Debugw("restored shard state on dagstore startup", "shard", s.key, "shard state", s.state, "shard error", s.err,
 			"shard lazy", s.lazy)
+		// vyzo: is this lock protected? does it have to?
+		//       add some comment here; it seems this method is only called on start, but what about
+		//       concurrent calls _while we are starting_?
+		//       I think it should be lock protected.
 		d.shards[s.key] = s
 	}
 }

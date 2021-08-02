@@ -23,6 +23,10 @@ func (d *DAGStore) dispatchResult(res *ShardResult, waiters ...*waiter) {
 			// no return channel; skip.
 			continue
 		}
+		// vyzo: this can block and take the event loop down with it; it can happen if the context
+		//       is done in dispatcher.
+		//       this needs the context to select on, and return an error if it is done so that
+		//       the event loop can exit
 		d.dispatchResultsCh <- &dispatch{w: w, res: res}
 	}
 }
