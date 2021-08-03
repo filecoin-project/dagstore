@@ -108,6 +108,8 @@ type DAGStore struct {
 	wg       sync.WaitGroup
 }
 
+var _ Interface = (*DAGStore)(nil)
+
 type dispatch struct {
 	w   *waiter
 	res *ShardResult
