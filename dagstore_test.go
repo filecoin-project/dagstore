@@ -10,16 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filecoin-project/dagstore/index"
-	"github.com/filecoin-project/dagstore/mount"
-	"github.com/filecoin-project/dagstore/shard"
-	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/ipfs/go-datastore"
 	dsq "github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/filecoin-project/dagstore/index"
+	"github.com/filecoin-project/dagstore/mount"
+	"github.com/filecoin-project/dagstore/shard"
+	"github.com/filecoin-project/dagstore/testdata"
 )
 
 var (
@@ -1249,6 +1250,77 @@ func TestAcquireFailsWhenIndexGone(t *testing.T) {
 // but not the event loop.
 func TestBlockCallback(t *testing.T) {
 	t.Skip("TODO")
+}
+
+func TestWaiterContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan ShardResult)
+	notifyCh := make(chan struct{})
+	w := &waiter{ctx: ctx, outCh: ch, notifyDead: func() { close(notifyCh) }}
+	cancel()
+	w.deliver(&ShardResult{})
+	_, open := <-notifyCh
+	require.False(t, open)
+}
+
+func TestAcquireContextCancelled(t *testing.T) {
+	r := testRegistry(t)
+	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
+	require.NoError(t, err)
+
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: r,
+		TransientsDir: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult)
+	k := shard.KeyFromString("foo")
+	block := newBlockingMount(carv2mnt)
+	err = dagst.RegisterShard(context.Background(), k, block, ch, RegisterOpts{LazyInitialization: true})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // start with a cancelled context
+	err = dagst.AcquireShard(ctx, k, ch, AcquireOpts{})
+	require.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	select {
+	case res := <-ch:
+		t.Fatalf("expected no ShardResult, got: %+v", res)
+	case <-time.After(1 * time.Second):
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	err = dagst.AcquireShard(ctx, k, ch, AcquireOpts{})
+	require.NoError(t, err)
+	block.UnblockNext(1)
+	cancel() // cancel immediately after unblocking.
+
+	time.Sleep(1 * time.Second)
+
+	select {
+	case res := <-ch:
+		t.Fatalf("expected no ShardResult, got: %+v", res)
+	case <-time.After(1 * time.Second):
+	}
+
+	// event loop continues to operate.
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{})
+	require.NoError(t, err)
+	res = <-ch
+	require.NoError(t, res.Error)
+	require.NotNil(t, res.Accessor)
+	err = res.Accessor.Close()
+	require.NoError(t, err)
+
 }
 
 // registerShards registers n shards concurrently, using the CARv2 mount.

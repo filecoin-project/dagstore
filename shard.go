@@ -11,8 +11,9 @@ import (
 // waiter encapsulates a context passed by the user, and the channel they want
 // the result returned to.
 type waiter struct {
-	ctx   context.Context    // governs the op if it's external
-	outCh chan<- ShardResult // to send back the result
+	ctx        context.Context    // governs the op if it's external
+	outCh      chan<- ShardResult // to send back the result
+	notifyDead func()             // called when the context expired and we weren't able to deliver the result
 }
 
 func (w waiter) deliver(res *ShardResult) {
@@ -22,6 +23,9 @@ func (w waiter) deliver(res *ShardResult) {
 	select {
 	case w.outCh <- *res:
 	case <-w.ctx.Done():
+		if w.notifyDead != nil {
+			w.notifyDead()
+		}
 	}
 }
 
