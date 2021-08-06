@@ -3,9 +3,10 @@ package dagstore
 import (
 	"context"
 
-	"github.com/filecoin-project/dagstore/mount"
 	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/index"
+
+	"github.com/filecoin-project/dagstore/mount"
 )
 
 //
@@ -19,6 +20,19 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	k := s.key
 
 	reader, err := mnt.Fetch(ctx)
+
+	if err := ctx.Err(); err != nil {
+		log.Warnw("context cancelled while fetching shard; releasing", "shard", s.key, "error", err)
+
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// send the shard error to the caller for correctness
+		// since the context is cancelled, the result will be discarded.
+		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
+		return
+	}
+
 	if err != nil {
 		log.Warnw("acquire: failed to fetch from mount upgrader", "shard", s.key, "error", err)
 
@@ -35,7 +49,21 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	log.Debugw("acquire: successfully fetched from mount upgrader", "shard", s.key)
 
+	// acquire the index.
 	idx, err := d.indices.GetFullIndex(k)
+
+	if err := ctx.Err(); err != nil {
+		log.Warnw("context cancelled while indexing shard; releasing", "shard", s.key, "error", err)
+
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+
+		// send the shard error to the caller for correctness
+		// since the context is cancelled, the result will be discarded.
+		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
+		return
+	}
+
 	if err != nil {
 		log.Warnw("acquire: failed to get index for shard", "shard", s.key, "error", err)
 		if err := reader.Close(); err != nil {
@@ -54,9 +82,20 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	}
 
 	log.Debugw("acquire: successful; returning accessor", "shard", s.key)
+
+	// build the accessor.
 	sa, err := NewShardAccessor(reader, idx, s)
 
-	// send the shard accessor to the caller.
+	// send the shard accessor to the caller, adding a notifyDead function that
+	// will be called to release the shard if we were unable to deliver
+	// the accessor.
+	w.notifyDead = func() {
+		log.Warnw("context cancelled while delivering accessor; releasing", "shard", s.key)
+
+		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
+	}
+
 	d.dispatchResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)
 }
 
@@ -70,9 +109,9 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
 		return
 	}
+	defer reader.Close()
 
 	log.Debugw("initialize: successfully fetched from mount upgrader", "shard", s.key)
-	defer reader.Close()
 
 	// works for both CARv1 and CARv2.
 	var idx index.Index

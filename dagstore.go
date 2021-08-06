@@ -7,15 +7,16 @@ import (
 	"os"
 	"sync"
 
-	"github.com/filecoin-project/dagstore/index"
-	"github.com/filecoin-project/dagstore/mount"
-	"github.com/filecoin-project/dagstore/shard"
-	"github.com/filecoin-project/dagstore/throttle"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
+
+	"github.com/filecoin-project/dagstore/index"
+	"github.com/filecoin-project/dagstore/mount"
+	"github.com/filecoin-project/dagstore/shard"
+	"github.com/filecoin-project/dagstore/throttle"
 )
 
 var (

@@ -34,12 +34,18 @@ const (
 )
 
 func (ss ShardState) String() string {
-	return [...]string{
+	strs := [...]string{
 		ShardStateNew:          "ShardStateNew",
 		ShardStateInitializing: "ShardStateInitializing",
 		ShardStateAvailable:    "ShardStateAvailable",
 		ShardStateServing:      "ShardStateServing",
 		ShardStateRecovering:   "ShardStateRecovering",
 		ShardStateErrored:      "ShardStateErrored",
-		ShardStateUnknown:      "ShardStateUnknown"}[ss]
+		ShardStateUnknown:      "ShardStateUnknown",
+	}
+	if ss < 0 || int(ss) >= len(strs) {
+		// safety comes first.
+		return "__undefined__"
+	}
+	return strs[ss]
 }

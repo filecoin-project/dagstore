@@ -222,18 +222,18 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 }
 
 func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
-	 nFixedThrottle := 3
+	nFixedThrottle := 3
 
-	tcs := map[string]struct{
-		ready bool
+	tcs := map[string]struct {
+		ready                  bool
 		expectedThrottledReads int
 	}{
-		"no throttling when mount is not ready":{
-			ready: false,
+		"no throttling when mount is not ready": {
+			ready:                  false,
 			expectedThrottledReads: 100,
 		},
-		"throttle when mount is ready":{
-			ready: true,
+		"throttle when mount is ready": {
+			ready:                  true,
 			expectedThrottledReads: nFixedThrottle,
 		},
 	}
@@ -247,7 +247,7 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 
 			underlyings := make([]*blockingReaderMount, 100)
 			for i := range upgraders {
-				underlyings[i] = &blockingReaderMount{isReady:tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
+				underlyings[i] = &blockingReaderMount{isReady: tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
 				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "")
 				require.NoError(t, err)
 				upgraders[i] = u
@@ -326,7 +326,7 @@ func (br *blockingReader) Read(b []byte) (n int, err error) {
 
 type blockingReaderMount struct {
 	isReady bool
-	br *blockingReader
+	br      *blockingReader
 }
 
 var _ Mount = (*blockingReaderMount)(nil)
@@ -350,7 +350,7 @@ func (b *blockingReaderMount) Stat(ctx context.Context) (Stat, error) {
 	return Stat{
 		Exists: true,
 		Size:   1024,
-		Ready: b.isReady,
+		Ready:  b.isReady,
 	}, nil
 }
 
