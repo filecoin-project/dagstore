@@ -69,7 +69,7 @@ populated:
 2. Indexless CARv2: the index is calculated upon shard activation.
 3. Indexed CARv2: the inline index is adopted as-is as the shard index.
 
-### Shard states
+### Shard states
 
 1. **Available:** the system knows about this shard and is capable of serving
    data from it instantaneously, because (a) an index exists and is loaded, and
