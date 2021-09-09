@@ -7,6 +7,10 @@ import (
 	"os"
 	"sync"
 
+	"github.com/ipfs/go-cid"
+
+	"github.com/filecoin-project/dagstore/invertedindex"
+
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -63,12 +67,13 @@ var (
 
 // DAGStore is the central object of the DAG store.
 type DAGStore struct {
-	lk      sync.RWMutex
-	mounts  *mount.Registry
-	shards  map[shard.Key]*Shard
-	config  Config
-	indices index.FullIndexRepo
-	store   ds.Datastore
+	lk            sync.RWMutex
+	mounts        *mount.Registry
+	shards        map[shard.Key]*Shard
+	config        Config
+	indices       index.FullIndexRepo
+	invertedIndex invertedindex.Index
+	store         ds.Datastore
 
 	// Channels owned by us.
 	//
@@ -139,6 +144,8 @@ type Config struct {
 	// IndexRepo is the full index repo to use.
 	IndexRepo index.FullIndexRepo
 
+	InvertedIndex invertedindex.Index
+
 	// Datastore is the datastore where shard state will be persisted.
 	Datastore ds.Datastore
 
@@ -194,6 +201,11 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		cfg.IndexRepo = index.NewMemoryRepo()
 	}
 
+	if cfg.InvertedIndex == nil {
+		log.Info("using in-memory inverted index")
+		cfg.InvertedIndex = invertedindex.NewDataStoreIndex(dssync.MutexWrap(ds.NewMapDatastore()))
+	}
+
 	// handle the datastore.
 	if cfg.Datastore == nil {
 		log.Warnf("no datastore provided; falling back to in-mem datastore; shard state will not survive restarts")
@@ -212,6 +224,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		mounts:              cfg.MountRegistry,
 		config:              cfg,
 		indices:             cfg.IndexRepo,
+		invertedIndex:       cfg.InvertedIndex,
 		shards:              make(map[shard.Key]*Shard),
 		store:               cfg.Datastore,
 		externalCh:          make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
@@ -316,6 +329,11 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// TODO: There is a race between calling this and deal expory which will cause deletion from the inverted index.
+func (d *DAGStore) GetShardKeysForCid(c cid.Cid) ([]shard.Key, error) {
+	return d.invertedIndex.GetShardsForCid(c)
 }
 
 type RegisterOpts struct {
