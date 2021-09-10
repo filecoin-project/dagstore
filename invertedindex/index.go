@@ -3,26 +3,25 @@ package invertedindex
 import (
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
+	"github.com/ipld/go-car/v2/index"
+	mh "github.com/multiformats/go-multihash"
 )
 
-// TODO Replace with CAR Index iterator once Data-systems finishes it.
-type CidIterator []cid.Cid
-
 type Index interface {
-	AddCidsForShard(cidIter CidIterator, s shard.Key) error
+	AddMultihashesForShard(mhIter index.IterableIndex, s shard.Key) error
 
-	DeleteCidsForShard(s shard.Key, cidIterator CidIterator) error
+	DeleteMultihashesForShard(s shard.Key, mhIter index.IterableIndex) error
 
 	GetShardsForCid(c cid.Cid) ([]shard.Key, error)
 
-	NCids() (uint64, error)
+	NMultihashes() (uint64, error)
 
 	Iterator() (Iterator, error)
 }
 
 type IndexEntry struct {
-	Cid    cid.Cid
-	Shards []shard.Key
+	Multihash mh.Multihash
+	Shards    []shard.Key
 }
 
 type Iterator interface {

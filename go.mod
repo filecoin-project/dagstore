@@ -7,9 +7,10 @@ require (
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.4.5
 	github.com/ipfs/go-log/v2 v2.1.3
-	github.com/ipld/go-car/v2 v2.0.2
+	github.com/ipld/go-car/v2 v2.0.3-0.20210910134712-2d2568297f26
 	github.com/mr-tron/base58 v1.2.0
-	github.com/multiformats/go-multicodec v0.3.0
+	github.com/multiformats/go-multicodec v0.3.1-0.20210902112759-1539a079fd61
+	github.com/multiformats/go-multihash v0.0.15
 	github.com/stretchr/testify v1.7.0
 	github.com/whyrusleeping/cbor-gen v0.0.0-20200123233031-1cdf64d27158
 	golang.org/x/exp v0.0.0-20210714144626-1041f73d31d8
