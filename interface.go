@@ -3,6 +3,8 @@ package dagstore
 import (
 	"context"
 
+	"github.com/ipfs/go-cid"
+
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 )
@@ -17,6 +19,7 @@ type Interface interface {
 	RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error
 	GetShardInfo(k shard.Key) (ShardInfo, error)
 	AllShardsInfo() AllShardsInfo
+	GetShardKeysForCid(c cid.Cid) ([]shard.Key, error)
 	GC(ctx context.Context) (*GCResult, error)
 	Close() error
 }
