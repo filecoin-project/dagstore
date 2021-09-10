@@ -4,14 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ipfs/go-datastore/namespace"
-
-	"github.com/ipfs/go-datastore/query"
-
-	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/namespace"
+	"github.com/ipfs/go-datastore/query"
+	logging "github.com/ipfs/go-log/v2"
+
+	"github.com/filecoin-project/dagstore/shard"
 )
+
+var log = logging.Logger("dagstore.invidx")
 
 var _ Index = (*DataStoreIndex)(nil)
 
@@ -22,6 +24,7 @@ type DataStoreIndex struct {
 }
 
 func NewDataStoreIndex(d ds.Batching) *DataStoreIndex {
+	log.Debugf("Creating new datastore cid -> shard index")
 	wds := namespace.Wrap(d, ds.NewKey(prefix))
 
 	return &DataStoreIndex{
@@ -36,7 +39,8 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 	}
 
 	for _, c := range cidIter {
-		ck := ds.NewKey(c.String())
+		cstr := c.String()
+		ck := ds.NewKey(cstr)
 
 		// do we already have an entry for the cid ?
 		sbz, err := d.ds.Get(ck)
@@ -46,14 +50,16 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 		}
 
 		if err == ds.ErrNotFound {
-			s := []shard.Key{s}
-			bz, err := json.Marshal(s)
+			sarr := []shard.Key{s}
+			bz, err := json.Marshal(sarr)
 			if err != nil {
 				return fmt.Errorf("failed to marshal shard list to bytes: %w", err)
 			}
 			if err := batch.Put(ck, bz); err != nil {
 				return fmt.Errorf("failed to put cid=%s, err=%w", c.String(), err)
 			}
+
+			log.Debugf("+ %s -> %s", cstr, s)
 			continue
 		}
 
@@ -70,6 +76,8 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 		if err := batch.Put(ck, bz); err != nil {
 			return fmt.Errorf("failed to put cid=%s, err=%w", c.String(), err)
 		}
+
+		log.Debugf("+ %s -> %s", cstr, s)
 	}
 
 	if err := batch.Commit(); err != nil {
@@ -86,7 +94,8 @@ func (d *DataStoreIndex) DeleteCidsForShard(sk shard.Key, cidIterator CidIterato
 	}
 
 	for _, c := range cidIterator {
-		ck := ds.NewKey(c.String())
+		cstr := c.String()
+		ck := ds.NewKey(cstr)
 
 		sbz, err := d.ds.Get(ck)
 		if err != nil {
@@ -112,6 +121,8 @@ func (d *DataStoreIndex) DeleteCidsForShard(sk shard.Key, cidIterator CidIterato
 		if err := batch.Put(ck, sbz2); err != nil {
 			return fmt.Errorf("failed to put cid=%s, err=%w", c, err)
 		}
+
+		log.Debugf("- %s -> %s", cstr, sk)
 	}
 
 	if err := batch.Commit(); err != nil {

@@ -10,6 +10,7 @@ require (
 	github.com/ipld/go-car/v2 v2.0.2
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.3.0
+	github.com/multiformats/go-varint v0.0.6 // indirect
 	github.com/stretchr/testify v1.7.0
 	github.com/whyrusleeping/cbor-gen v0.0.0-20200123233031-1cdf64d27158
 	golang.org/x/exp v0.0.0-20210714144626-1041f73d31d8

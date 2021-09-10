@@ -3,7 +3,7 @@ package dagstore
 import (
 	"context"
 
-	"github.com/ipfs/go-cid"
+	car2 "github.com/filecoin-project/dagstore/car"
 
 	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/index"
@@ -137,8 +137,15 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	}
 
 	// add all cids in the shard to the inverted (cid -> []Shard Keys) index.
-	// TODO Pass the CAR Index iterator here once it's ready
-	if err := d.invertedIndex.AddCidsForShard([]cid.Cid{}, s.key); err != nil {
+	// TODO Pass the CAR Index iterator here once it's ready. For now we're
+	// using this hacked together ReadCids method.
+	cids, err := car2.ReadCids(reader)
+	if err != nil {
+		_ = d.failShard(s, d.completionCh, "failed to read cids from shard: %w", err)
+		return
+	}
+
+	if err := d.invertedIndex.AddCidsForShard(cids, s.key); err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to add shard cids to the inverted index: %w", err)
 		return
 	}
