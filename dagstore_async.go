@@ -3,8 +3,6 @@ package dagstore
 import (
 	"context"
 
-	"github.com/ipfs/go-cid"
-
 	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/index"
 
@@ -137,9 +135,14 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	}
 
 	// add all cids in the shard to the inverted (cid -> []Shard Keys) index.
-	// TODO Pass the CAR Index iterator here once it's ready
-	if err := d.invertedIndex.AddCidsForShard([]cid.Cid{}, s.key); err != nil {
-		_ = d.failShard(s, d.completionCh, "failed to add shard cids to the inverted index: %w", err)
+	iterableIdx, ok := idx.(index.IterableIndex)
+	if !ok {
+		_ = d.failShard(s, d.completionCh, "shard index is not iterable")
+		return
+	}
+
+	if err := d.invertedIndex.AddMultihashesForShard(iterableIdx, s.key); err != nil {
+		_ = d.failShard(s, d.completionCh, "failed to add shard multihashes to the inverted index: %w", err)
 		return
 	}
 

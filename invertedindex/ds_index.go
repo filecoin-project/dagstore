@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ipfs/go-datastore/namespace"
-
-	"github.com/ipfs/go-datastore/query"
-
-	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/namespace"
+	"github.com/ipfs/go-datastore/query"
+	"github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multihash"
+
+	"github.com/filecoin-project/dagstore/shard"
 )
 
 var _ Index = (*DataStoreIndex)(nil)
@@ -29,20 +30,20 @@ func NewDataStoreIndex(d ds.Batching) *DataStoreIndex {
 	}
 }
 
-func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error {
+func (d *DataStoreIndex) AddMultihashesForShard(mhIter index.IterableIndex, s shard.Key) error {
 	batch, err := d.ds.Batch()
 	if err != nil {
 		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
-	for _, c := range cidIter {
-		ck := ds.NewKey(c.String())
+	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
+		ck := multiHashToDsKey(mh)
 
 		// do we already have an entry for the cid ?
 		sbz, err := d.ds.Get(ck)
 
 		if err != nil && err != ds.ErrNotFound {
-			return fmt.Errorf("failed to get shard keys for cid=%s", c.String())
+			return fmt.Errorf("failed to get shard keys for cid=%s", mh.String())
 		}
 
 		if err == ds.ErrNotFound {
@@ -52,9 +53,9 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 				return fmt.Errorf("failed to marshal shard list to bytes: %w", err)
 			}
 			if err := batch.Put(ck, bz); err != nil {
-				return fmt.Errorf("failed to put cid=%s, err=%w", c.String(), err)
+				return fmt.Errorf("failed to put cid=%s, err=%w", mh.String(), err)
 			}
-			continue
+			return nil
 		}
 
 		var es []shard.Key
@@ -68,8 +69,12 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 			return fmt.Errorf("failed to marshal shard keys: %w", err)
 		}
 		if err := batch.Put(ck, bz); err != nil {
-			return fmt.Errorf("failed to put cid=%s, err=%w", c.String(), err)
+			return fmt.Errorf("failed to put cid=%s, err=%w", mh.String(), err)
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	if err := batch.Commit(); err != nil {
@@ -79,18 +84,18 @@ func (d *DataStoreIndex) AddCidsForShard(cidIter CidIterator, s shard.Key) error
 	return nil
 }
 
-func (d *DataStoreIndex) DeleteCidsForShard(sk shard.Key, cidIterator CidIterator) error {
+func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter index.IterableIndex) error {
 	batch, err := d.ds.Batch()
 	if err != nil {
 		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
-	for _, c := range cidIterator {
-		ck := ds.NewKey(c.String())
+	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
+		ck := multiHashToDsKey(mh)
 
 		sbz, err := d.ds.Get(ck)
 		if err != nil {
-			return fmt.Errorf("failed to get shards for cid=%s, err=%w", c, err)
+			return fmt.Errorf("failed to get shards for multihash=%s, err=%w", mh.String(), err)
 		}
 		var es []shard.Key
 		if err := json.Unmarshal(sbz, &es); err != nil {
@@ -110,8 +115,13 @@ func (d *DataStoreIndex) DeleteCidsForShard(sk shard.Key, cidIterator CidIterato
 		}
 
 		if err := batch.Put(ck, sbz2); err != nil {
-			return fmt.Errorf("failed to put cid=%s, err=%w", c, err)
+			return fmt.Errorf("failed to put multihash=%s, err=%w", mh.String(), err)
 		}
+
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	if err := batch.Commit(); err != nil {
@@ -122,7 +132,8 @@ func (d *DataStoreIndex) DeleteCidsForShard(sk shard.Key, cidIterator CidIterato
 }
 
 func (d *DataStoreIndex) GetShardsForCid(c cid.Cid) ([]shard.Key, error) {
-	ck := ds.NewKey(c.String())
+	mh := c.Hash()
+	ck := multiHashToDsKey(mh)
 	sbz, err := d.ds.Get(ck)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup index for cid %s, err: %w", c, err)
@@ -137,7 +148,7 @@ func (d *DataStoreIndex) GetShardsForCid(c cid.Cid) ([]shard.Key, error) {
 	return shardKeys, nil
 }
 
-func (d *DataStoreIndex) NCids() (uint64, error) {
+func (d *DataStoreIndex) Length() (uint64, error) {
 	res, err := d.ds.Query(query.Query{KeysOnly: true})
 	if err != nil {
 		return 0, err
@@ -171,7 +182,7 @@ func (i *iteratorImpl) Next() (has bool, entry IndexEntry, err error) {
 		return has, IndexEntry{}, nil
 	}
 
-	c, err := cid.Decode(res.Key)
+	mh, err := multihash.FromHexString(res.Key)
 	if err != nil {
 		return false, IndexEntry{}, fmt.Errorf("failed to decode cid=%s, err=%w", res.Key, err)
 	}
@@ -183,7 +194,11 @@ func (i *iteratorImpl) Next() (has bool, entry IndexEntry, err error) {
 	}
 
 	return true, IndexEntry{
-		Cid:    c,
-		Shards: shardKeys,
+		Multihash: mh,
+		Shards:    shardKeys,
 	}, nil
+}
+
+func multiHashToDsKey(mh multihash.Multihash) ds.Key {
+	return ds.NewKey(mh.HexString())
 }
