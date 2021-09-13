@@ -37,7 +37,7 @@ func (d *DataStoreIndex) AddMultihashesForShard(mhIter index.IterableIndex, s sh
 	}
 
 	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
-		ck := ds.NewKey(mh.HexString())
+		ck := multiHashToDsKey(mh)
 
 		// do we already have an entry for the cid ?
 		sbz, err := d.ds.Get(ck)
@@ -91,7 +91,7 @@ func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter index.It
 	}
 
 	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
-		ck := ds.NewKey(mh.HexString())
+		ck := multiHashToDsKey(mh)
 
 		sbz, err := d.ds.Get(ck)
 		if err != nil {
@@ -133,7 +133,7 @@ func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter index.It
 
 func (d *DataStoreIndex) GetShardsForCid(c cid.Cid) ([]shard.Key, error) {
 	mh := c.Hash()
-	ck := ds.NewKey(mh.HexString())
+	ck := multiHashToDsKey(mh)
 	sbz, err := d.ds.Get(ck)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup index for cid %s, err: %w", c, err)
@@ -148,7 +148,7 @@ func (d *DataStoreIndex) GetShardsForCid(c cid.Cid) ([]shard.Key, error) {
 	return shardKeys, nil
 }
 
-func (d *DataStoreIndex) NMultihashes() (uint64, error) {
+func (d *DataStoreIndex) Length() (uint64, error) {
 	res, err := d.ds.Query(query.Query{KeysOnly: true})
 	if err != nil {
 		return 0, err
@@ -197,4 +197,8 @@ func (i *iteratorImpl) Next() (has bool, entry IndexEntry, err error) {
 		Multihash: mh,
 		Shards:    shardKeys,
 	}, nil
+}
+
+func multiHashToDsKey(mh multihash.Multihash) ds.Key {
+	return ds.NewKey(mh.HexString())
 }

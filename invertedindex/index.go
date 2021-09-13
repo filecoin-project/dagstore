@@ -14,7 +14,7 @@ type Index interface {
 
 	GetShardsForCid(c cid.Cid) ([]shard.Key, error)
 
-	NMultihashes() (uint64, error)
+	Length() (uint64, error)
 
 	Iterator() (Iterator, error)
 }
