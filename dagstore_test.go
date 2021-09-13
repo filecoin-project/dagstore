@@ -29,7 +29,7 @@ var (
 )
 
 func init() {
-	_ = logging.SetLogLevel("dagstore", "DEBUG")
+	_ = logging.SetLogLevel("dagstore", "INFO")
 }
 
 func TestRegisterUsingExistingTransient(t *testing.T) {
