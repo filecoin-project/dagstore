@@ -3,14 +3,18 @@ package invertedindex
 import (
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/ipfs/go-cid"
-	"github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multihash"
 	mh "github.com/multiformats/go-multihash"
 )
 
-type Index interface {
-	AddMultihashesForShard(mhIter index.IterableIndex, s shard.Key) error
+type MultihashIterator interface {
+	ForEach(func(mh multihash.Multihash) error) error
+}
 
-	DeleteMultihashesForShard(s shard.Key, mhIter index.IterableIndex) error
+type Index interface {
+	AddMultihashesForShard(mhIter MultihashIterator, s shard.Key) error
+
+	DeleteMultihashesForShard(s shard.Key, mhIter MultihashIterator) error
 
 	GetShardsForCid(c cid.Cid) ([]shard.Key, error)
 
