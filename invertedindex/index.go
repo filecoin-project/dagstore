@@ -18,9 +18,12 @@ type Index interface {
 
 	GetShardsForCid(c cid.Cid) ([]shard.Key, error)
 
-	Length() (uint64, error)
+	// size on disk
+	Size() (int64, error)
 
-	Iterator() (Iterator, error)
+	NCids() (int64, error)
+
+	//Iterator() (Iterator, error)
 }
 
 type IndexEntry struct {

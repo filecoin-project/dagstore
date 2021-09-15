@@ -203,7 +203,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if cfg.InvertedIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.InvertedIndex = invertedindex.NewDataStoreIndex(dssync.MutexWrap(ds.NewMapDatastore()))
+		cfg.InvertedIndex = invertedindex.NewIndexerCore(dssync.MutexWrap(ds.NewMapDatastore()))
 	}
 
 	// handle the datastore.
