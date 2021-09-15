@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 
+	"github.com/filecoin-project/go-indexer-core/store/memory"
+
 	"github.com/ipfs/go-cid"
 
 	"github.com/filecoin-project/dagstore/invertedindex"
@@ -203,7 +205,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if cfg.InvertedIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.InvertedIndex = invertedindex.NewIndexerCore(dssync.MutexWrap(ds.NewMapDatastore()))
+		cfg.InvertedIndex = invertedindex.NewIndexerCore(memory.New())
 	}
 
 	// handle the datastore.
