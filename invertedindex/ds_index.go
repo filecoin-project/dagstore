@@ -8,7 +8,6 @@ import (
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
-	"github.com/ipld/go-car/v2/index"
 	"github.com/multiformats/go-multihash"
 
 	"github.com/filecoin-project/dagstore/shard"
@@ -30,13 +29,13 @@ func NewDataStoreIndex(d ds.Batching) *DataStoreIndex {
 	}
 }
 
-func (d *DataStoreIndex) AddMultihashesForShard(mhIter index.IterableIndex, s shard.Key) error {
+func (d *DataStoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s shard.Key) error {
 	batch, err := d.ds.Batch()
 	if err != nil {
 		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
-	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
+	err = mhIter.ForEach(func(mh multihash.Multihash) error {
 		ck := multiHashToDsKey(mh)
 
 		// do we already have an entry for the cid ?
@@ -84,13 +83,13 @@ func (d *DataStoreIndex) AddMultihashesForShard(mhIter index.IterableIndex, s sh
 	return nil
 }
 
-func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter index.IterableIndex) error {
+func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
 	batch, err := d.ds.Batch()
 	if err != nil {
 		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
-	err = mhIter.ForEach(func(mh multihash.Multihash, _ uint64) error {
+	err = mhIter.ForEach(func(mh multihash.Multihash) error {
 		ck := multiHashToDsKey(mh)
 
 		sbz, err := d.ds.Get(ck)
@@ -100,6 +99,20 @@ func (d *DataStoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter index.It
 		var es []shard.Key
 		if err := json.Unmarshal(sbz, &es); err != nil {
 			return fmt.Errorf("failed to unmarshal shard keys: %w", err)
+		}
+
+		// If there is a single shard key for this multihash
+		if len(es) == 1 {
+			// If the shard key should be removed, there will be no shards left
+			// for this multihash, so delete the datastore key for this
+			// multihash entirely
+			if es[0] == sk {
+				if err := batch.Delete(ck); err != nil {
+					return fmt.Errorf("failed to delete multihash=%s, err=%w", mh.String(), err)
+				}
+			}
+
+			return nil
 		}
 
 		newShards := make([]shard.Key, 0, len(es)-1)
@@ -182,7 +195,11 @@ func (i *iteratorImpl) Next() (has bool, entry IndexEntry, err error) {
 		return has, IndexEntry{}, nil
 	}
 
-	mh, err := multihash.FromHexString(res.Key)
+	k := res.Key
+	if k[0] == '/' {
+		k = k[1:]
+	}
+	mh, err := multihash.FromHexString(k)
 	if err != nil {
 		return false, IndexEntry{}, fmt.Errorf("failed to decode cid=%s, err=%w", res.Key, err)
 	}

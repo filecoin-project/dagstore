@@ -5,7 +5,9 @@ import (
 
 	"github.com/ipld/go-car/v2"
 	"github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multihash"
 
+	"github.com/filecoin-project/dagstore/invertedindex"
 	"github.com/filecoin-project/dagstore/mount"
 )
 
@@ -141,10 +143,25 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 		return
 	}
 
-	if err := d.invertedIndex.AddMultihashesForShard(iterableIdx, s.key); err != nil {
+	mhIter := &mhIdx{iterableIdx: iterableIdx}
+	if err := d.invertedIndex.AddMultihashesForShard(mhIter, s.key); err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to add shard multihashes to the inverted index: %w", err)
 		return
 	}
 
 	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
+}
+
+// Convenience struct for converting from CAR index.IterableIndex to the
+// iterator required by the dag store inverted index.
+type mhIdx struct {
+	iterableIdx index.IterableIndex
+}
+
+var _ invertedindex.MultihashIterator = (*mhIdx)(nil)
+
+func (it *mhIdx) ForEach(fn func(mh multihash.Multihash) error) error {
+	return it.iterableIdx.ForEach(func(mh multihash.Multihash, _ uint64) error {
+		return fn(mh)
+	})
 }
