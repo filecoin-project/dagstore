@@ -333,9 +333,8 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	return nil
 }
 
-// TODO: There is a race between calling this and deal expory which will cause deletion from the inverted index.
 func (d *DAGStore) GetShardKeysForCid(c cid.Cid) ([]shard.Key, error) {
-	return d.invertedIndex.GetShardsForCid(c)
+	return d.invertedIndex.GetShardsForMultihash(c.Hash())
 }
 
 type RegisterOpts struct {

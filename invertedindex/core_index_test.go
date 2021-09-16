@@ -26,14 +26,8 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 	req.NoError(err)
 	req.EqualValues(0, l)
 
-	_, err = idx.GetShardsForCid(cid1)
+	_, err = idx.GetShardsForMultihash(cid1.Hash())
 	req.True(xerrors.Is(err, ErrNotFound))
-
-	/*it, err := idx.Iterator()
-	req.NoError(err)
-	has, _, err := it.Next()
-	req.NoError(err)
-	req.False(has)*/
 }
 
 func TestDatastoreIndex(t *testing.T) {
@@ -70,7 +64,7 @@ func TestDatastoreIndex(t *testing.T) {
 
 	// Verify h1 mapping:
 	// h1 -> [shard-key-1, shard-key-2]
-	shards, err := idx.GetShardsForCid(cid1)
+	shards, err := idx.GetShardsForMultihash(cid1.Hash())
 	req.NoError(err)
 	req.Len(shards, 2)
 	req.Contains(shards, sk1)
@@ -78,48 +72,10 @@ func TestDatastoreIndex(t *testing.T) {
 
 	// Verify h2 mapping:
 	// h2 -> [shard-key-1]
-	shards, err = idx.GetShardsForCid(cid2)
+	shards, err = idx.GetShardsForMultihash(cid2.Hash())
 	req.NoError(err)
 	req.Len(shards, 1)
 	req.Equal(shards[0], sk1)
-
-	// Verify iterator
-	/*it, err := idx.Iterator()
-	req.NoError(err)
-
-	checkEntry := func(e IndexEntry) {
-		switch e.Multihash.String() {
-
-		// h1 -> [shard-key-1, shard-key-2]
-		case h1.String():
-			req.Len(e.Shards, 2)
-			req.Contains(e.Shards, sk1)
-			req.Contains(e.Shards, sk2)
-
-		// h2 -> [shard-key-1]
-		case h2.String():
-			req.Len(e.Shards, 1)
-			req.Contains(e.Shards, sk1)
-
-		// h3 -> [shard-key-2]
-		case h3.String():
-			req.Len(e.Shards, 1)
-			req.Contains(e.Shards, sk2)
-		}
-	}
-
-	// Iterator should return three results
-	for i := 0; i < 3; i++ {
-		has, itentry, err := it.Next()
-		req.NoError(err)
-		req.True(has)
-		checkEntry(itentry)
-	}
-
-	// Should return has == false after three results
-	has, _, err := it.Next()
-	req.NoError(err)
-	req.False(has)*/
 }
 
 func TestDatastoreIndexDelete(t *testing.T) {
@@ -148,7 +104,7 @@ func TestDatastoreIndexDelete(t *testing.T) {
 	req.NoError(err)
 
 	// Verify that the hash is h2 (not h1)
-	shards, err := idx.GetShardsForCid(cid2)
+	shards, err := idx.GetShardsForMultihash(cid2.Hash())
 	req.NoError(err)
 	req.Len(shards, 1)
 	req.Contains(shards, sk1)
