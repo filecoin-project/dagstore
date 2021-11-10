@@ -7,9 +7,11 @@ import (
 	"os"
 	"sync"
 
-	"github.com/filecoin-project/go-indexer-core/store/memory"
+	mh "github.com/multiformats/go-multihash"
 
-	"github.com/ipfs/go-cid"
+	carindex "github.com/ipld/go-car/v2/index"
+
+	"github.com/filecoin-project/go-indexer-core/store/memory"
 
 	"github.com/filecoin-project/dagstore/invertedindex"
 
@@ -333,8 +335,22 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (d *DAGStore) GetShardKeysForCid(c cid.Cid) ([]shard.Key, error) {
-	return d.invertedIndex.GetShardsForMultihash(c.Hash())
+func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, error) {
+	fi, err := d.indices.GetFullIndex(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get iterable index: %w", err)
+	}
+
+	ii, ok := fi.(carindex.IterableIndex)
+	if !ok {
+		return nil, errors.New("index for shard is not iterable")
+	}
+
+	return ii, nil
+}
+
+func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
+	return d.invertedIndex.GetShardsForMultihash(h)
 }
 
 type RegisterOpts struct {

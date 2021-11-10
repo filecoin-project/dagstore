@@ -8,7 +8,7 @@ require (
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.4.5
 	github.com/ipfs/go-log/v2 v2.3.0
-	github.com/ipld/go-car/v2 v2.0.3-0.20210910134712-2d2568297f26
+	github.com/ipld/go-car/v2 v2.1.0
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.3.1-0.20210902112759-1539a079fd61
 	github.com/multiformats/go-multihash v0.0.16
@@ -17,4 +17,5 @@ require (
 	golang.org/x/exp v0.0.0-20210714144626-1041f73d31d8
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
+	gopkg.in/yaml.v2 v2.2.3 // indirect
 )
