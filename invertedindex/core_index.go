@@ -29,16 +29,14 @@ func (d *IndexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s sh
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// go-indexer-core appends values to the existing values we already have for the key
 		// it also takes care of de-duplicating values.
-		_, err := d.is.Put(mh, valueForShardKey(s))
-		return err
+		return d.is.Put(valueForShardKey(s), mh)
 	})
 }
 
 func (d *IndexerCoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// remove the given value i.e. shard key from the index for the given multihash.
-		_, err := d.is.Remove(mh, valueForShardKey(sk))
-		return err
+		return d.is.Remove(valueForShardKey(sk), mh)
 	})
 }
 
@@ -64,12 +62,13 @@ func (d *IndexerCoreIndex) Size() (int64, error) {
 }
 
 func shardKeyFromValue(val indexer.Value) shard.Key {
-	str := string(val.Metadata)
+	str := string(val.ContextID)
 	return shard.KeyFromString(str)
 }
 
 func valueForShardKey(key shard.Key) indexer.Value {
 	return indexer.Value{
-		Metadata: []byte(key.String()),
+		ContextID:     []byte(key.String()),
+		MetadataBytes: []byte(key.String()),
 	}
 }
