@@ -3,7 +3,7 @@ module github.com/filecoin-project/dagstore
 go 1.16
 
 require (
-	github.com/filecoin-project/go-indexer-core v0.1.1
+	github.com/filecoin-project/go-indexer-core v0.2.3
 	github.com/ipfs/go-block-format v0.0.3
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.4.5
