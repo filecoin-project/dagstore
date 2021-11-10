@@ -3,12 +3,15 @@ package dagstore
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/multiformats/go-multihash"
 
 	"github.com/ipfs/go-datastore"
 	dsq "github.com/ipfs/go-datastore/query"
@@ -159,6 +162,27 @@ func TestRegisterCarV2(t *testing.T) {
 	istat, err := dagst.indices.StatFullIndex(k)
 	require.NoError(t, err)
 	require.True(t, istat.Exists)
+
+	// ensure it's registered with the correct iterable index and has been indexed in the top-level index
+	ii, err := dagst.GetIterableIndex(k)
+	require.NoError(t, err)
+	require.NotNil(t, ii)
+	err = ii.ForEach(func(h multihash.Multihash, _ uint64) error {
+		k2, err := dagst.GetShardKeysForMultihash(h)
+		if err != nil {
+			return err
+		}
+
+		if len(k2) != 1 {
+			return errors.New("should match only one pieceCid")
+		}
+
+		if k2[0] != k {
+			return errors.New("not the correct key")
+		}
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 func TestRegisterConcurrentShards(t *testing.T) {
