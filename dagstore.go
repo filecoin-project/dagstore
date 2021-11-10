@@ -13,8 +13,6 @@ import (
 
 	"github.com/filecoin-project/go-indexer-core/store/memory"
 
-	"github.com/ipfs/go-cid"
-
 	"github.com/filecoin-project/dagstore/invertedindex"
 
 	ds "github.com/ipfs/go-datastore"
@@ -208,7 +206,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	if cfg.InvertedIndex == nil {
-		log.Warn("using in-memory inverted index")
+		log.Info("using in-memory inverted index")
 		cfg.InvertedIndex = invertedindex.NewIndexerCore(memory.New())
 	}
 
@@ -340,7 +338,7 @@ func (d *DAGStore) Start(ctx context.Context) error {
 func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, error) {
 	fi, err := d.indices.GetFullIndex(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get iterable index: %w", err)
 	}
 
 	ii, ok := fi.(carindex.IterableIndex)
@@ -351,11 +349,7 @@ func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, erro
 	return ii, nil
 }
 
-func (d *DAGStore) GetShardKeysForCid(c cid.Cid) ([]shard.Key, error) {
-	return d.invertedIndex.GetShardsForMultihash(c.Hash())
-}
-
-func (d *DAGStore) GetShardKeysForMultihash(h mh.Multihash) ([]shard.Key, error) {
+func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
 	return d.invertedIndex.GetShardsForMultihash(h)
 }
 
