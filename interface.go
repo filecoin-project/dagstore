@@ -3,6 +3,7 @@ package dagstore
 import (
 	"context"
 
+	carindex "github.com/ipld/go-car/v2/index"
 	mh "github.com/multiformats/go-multihash"
 
 	"github.com/filecoin-project/dagstore/mount"
@@ -18,6 +19,7 @@ type Interface interface {
 	AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error
 	RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error
 	GetShardInfo(k shard.Key) (ShardInfo, error)
+	GetIterableIndex(key shard.Key) (carindex.IterableIndex, error)
 	AllShardsInfo() AllShardsInfo
 	ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error)
 	GC(ctx context.Context) (*GCResult, error)
