@@ -27,7 +27,7 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 	req.EqualValues(0, l)
 
 	_, err = idx.GetShardsForMultihash(cid1.Hash())
-	req.True(xerrors.Is(err, ErrNotFound))
+	req.True(xerrors.Is(err, InvertedIndexErrNotFound))
 }
 
 func TestDatastoreIndex(t *testing.T) {

@@ -46,7 +46,7 @@ func (d *indexerCoreIndex) GetShardsForMultihash(mh multihash.Multihash) ([]shar
 		return nil, fmt.Errorf("failed to lookup index for multihash %s, err: %w", mh, err)
 	}
 	if !found || len(values) == 0 {
-		return nil, fmt.Errorf("cid not found, multihash=%s, err: %w", mh, ErrNotFound)
+		return nil, fmt.Errorf("cid not found, multihash=%s, err: %w", mh, InvertedIndexErrNotFound)
 	}
 
 	shardKeys := make([]shard.Key, 0, len(values))
