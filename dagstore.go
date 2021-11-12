@@ -7,6 +7,12 @@ import (
 	"os"
 	"sync"
 
+	mh "github.com/multiformats/go-multihash"
+
+	carindex "github.com/ipld/go-car/v2/index"
+
+	"github.com/filecoin-project/go-indexer-core/store/memory"
+
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -69,6 +75,9 @@ type DAGStore struct {
 	config  Config
 	indices index.FullIndexRepo
 	store   ds.Datastore
+
+	// TopLevelIndex is the top level (cid -> []shards) index that maps a cid to all the shards that is present in.
+	TopLevelIndex index.Inverted
 
 	// Channels owned by us.
 	//
@@ -139,6 +148,8 @@ type Config struct {
 	// IndexRepo is the full index repo to use.
 	IndexRepo index.FullIndexRepo
 
+	TopLevelIndex index.Inverted
+
 	// Datastore is the datastore where shard state will be persisted.
 	Datastore ds.Datastore
 
@@ -194,6 +205,11 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		cfg.IndexRepo = index.NewMemoryRepo()
 	}
 
+	if cfg.TopLevelIndex == nil {
+		log.Info("using in-memory inverted index")
+		cfg.TopLevelIndex = index.NewInverted(memory.New())
+	}
+
 	// handle the datastore.
 	if cfg.Datastore == nil {
 		log.Warnf("no datastore provided; falling back to in-mem datastore; shard state will not survive restarts")
@@ -212,6 +228,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		mounts:              cfg.MountRegistry,
 		config:              cfg,
 		indices:             cfg.IndexRepo,
+		TopLevelIndex:       cfg.TopLevelIndex,
 		shards:              make(map[shard.Key]*Shard),
 		store:               cfg.Datastore,
 		externalCh:          make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
@@ -316,6 +333,24 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, error) {
+	fi, err := d.indices.GetFullIndex(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get iterable index: %w", err)
+	}
+
+	ii, ok := fi.(carindex.IterableIndex)
+	if !ok {
+		return nil, errors.New("index for shard is not iterable")
+	}
+
+	return ii, nil
+}
+
+func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
+	return d.TopLevelIndex.GetShardsForMultihash(h)
 }
 
 type RegisterOpts struct {
