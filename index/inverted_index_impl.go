@@ -13,19 +13,19 @@ import (
 
 var InvertedIndexErrNotFound = errors.New("multihash not found in Index")
 
-var _ Inverted = (*IndexerCoreIndex)(nil)
+var _ Inverted = (*indexerCoreIndex)(nil)
 
-type IndexerCoreIndex struct {
+type indexerCoreIndex struct {
 	is indexer.Interface
 }
 
-func NewInverted(is indexer.Interface) *IndexerCoreIndex {
-	return &IndexerCoreIndex{
+func NewInverted(is indexer.Interface) *indexerCoreIndex {
+	return &indexerCoreIndex{
 		is: is,
 	}
 }
 
-func (d *IndexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s shard.Key) error {
+func (d *indexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s shard.Key) error {
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// go-indexer-core appends values to the existing values we already have for the key
 		// it also takes care of de-duplicating values.
@@ -33,14 +33,14 @@ func (d *IndexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s sh
 	})
 }
 
-func (d *IndexerCoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
+func (d *indexerCoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// remove the given value i.e. shard key from the index for the given multihash.
 		return d.is.Remove(valueForShardKey(sk), mh)
 	})
 }
 
-func (d *IndexerCoreIndex) GetShardsForMultihash(mh multihash.Multihash) ([]shard.Key, error) {
+func (d *indexerCoreIndex) GetShardsForMultihash(mh multihash.Multihash) ([]shard.Key, error) {
 	values, found, err := d.is.Get(mh)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup index for multihash %s, err: %w", mh, err)
@@ -57,7 +57,7 @@ func (d *IndexerCoreIndex) GetShardsForMultihash(mh multihash.Multihash) ([]shar
 	return shardKeys, nil
 }
 
-func (d *IndexerCoreIndex) Size() (int64, error) {
+func (d *indexerCoreIndex) Size() (int64, error) {
 	return d.is.Size()
 }
 
