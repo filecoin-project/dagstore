@@ -13,8 +13,6 @@ import (
 
 	"github.com/filecoin-project/go-indexer-core/store/memory"
 
-	"github.com/filecoin-project/dagstore/invertedindex"
-
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
@@ -71,13 +69,15 @@ var (
 
 // DAGStore is the central object of the DAG store.
 type DAGStore struct {
-	lk            sync.RWMutex
-	mounts        *mount.Registry
-	shards        map[shard.Key]*Shard
-	config        Config
-	indices       index.FullIndexRepo
-	InvertedIndex invertedindex.Index
-	store         ds.Datastore
+	lk      sync.RWMutex
+	mounts  *mount.Registry
+	shards  map[shard.Key]*Shard
+	config  Config
+	indices index.FullIndexRepo
+	store   ds.Datastore
+
+	// TopLevelIndex is the top level (cid -> []shards) index that maps a cid to all the shards that is present in.
+	TopLevelIndex index.Inverted
 
 	// Channels owned by us.
 	//
@@ -148,7 +148,7 @@ type Config struct {
 	// IndexRepo is the full index repo to use.
 	IndexRepo index.FullIndexRepo
 
-	InvertedIndex invertedindex.Index
+	TopLevelIndex index.Inverted
 
 	// Datastore is the datastore where shard state will be persisted.
 	Datastore ds.Datastore
@@ -205,9 +205,9 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		cfg.IndexRepo = index.NewMemoryRepo()
 	}
 
-	if cfg.InvertedIndex == nil {
+	if cfg.TopLevelIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.InvertedIndex = invertedindex.NewIndexerCore(memory.New())
+		cfg.TopLevelIndex = index.NewInverted(memory.New())
 	}
 
 	// handle the datastore.
@@ -228,7 +228,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		mounts:              cfg.MountRegistry,
 		config:              cfg,
 		indices:             cfg.IndexRepo,
-		InvertedIndex:       cfg.InvertedIndex,
+		TopLevelIndex:       cfg.TopLevelIndex,
 		shards:              make(map[shard.Key]*Shard),
 		store:               cfg.Datastore,
 		externalCh:          make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
@@ -350,7 +350,7 @@ func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, erro
 }
 
 func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
-	return d.InvertedIndex.GetShardsForMultihash(h)
+	return d.TopLevelIndex.GetShardsForMultihash(h)
 }
 
 type RegisterOpts struct {

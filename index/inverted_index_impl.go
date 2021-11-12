@@ -1,4 +1,4 @@
-package invertedindex
+package index
 
 import (
 	"errors"
@@ -11,15 +11,15 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
-var ErrNotFound = errors.New("multihash not found in Index")
+var InvertedIndexErrNotFound = errors.New("multihash not found in Index")
 
-var _ Index = (*IndexerCoreIndex)(nil)
+var _ Inverted = (*IndexerCoreIndex)(nil)
 
 type IndexerCoreIndex struct {
 	is indexer.Interface
 }
 
-func NewIndexerCore(is indexer.Interface) *IndexerCoreIndex {
+func NewInverted(is indexer.Interface) *IndexerCoreIndex {
 	return &IndexerCoreIndex{
 		is: is,
 	}

@@ -1,4 +1,4 @@
-package invertedindex
+package index
 
 import (
 	"testing"
@@ -20,7 +20,7 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 	cid1, err := cid.Parse("Qmard76Snyj9VCJBzLSLYzXnJJ2BnyCN2KAfAkpLXyt1q7")
 	req.NoError(err)
 
-	idx := NewIndexerCore(memory.New())
+	idx := NewInverted(memory.New())
 
 	l, err := idx.Size()
 	req.NoError(err)
@@ -44,7 +44,7 @@ func TestDatastoreIndex(t *testing.T) {
 	h2 := cid2.Hash()
 	h3 := cid3.Hash()
 
-	idx := NewIndexerCore(memory.New())
+	idx := NewInverted(memory.New())
 
 	// Add hash to shard key mappings for h1, h2:
 	// h1 -> [shard-key-1]
@@ -89,7 +89,7 @@ func TestDatastoreIndexDelete(t *testing.T) {
 	h1 := cid1.Hash()
 	h2 := cid2.Hash()
 
-	idx := NewIndexerCore(memory.New())
+	idx := NewInverted(memory.New())
 
 	// Add hash to shard key mappings for h1, h2:
 	// h1 -> [shard-key-1]
