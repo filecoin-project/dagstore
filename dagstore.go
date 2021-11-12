@@ -76,7 +76,7 @@ type DAGStore struct {
 	shards        map[shard.Key]*Shard
 	config        Config
 	indices       index.FullIndexRepo
-	invertedIndex invertedindex.Index
+	InvertedIndex invertedindex.Index
 	store         ds.Datastore
 
 	// Channels owned by us.
@@ -228,7 +228,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		mounts:              cfg.MountRegistry,
 		config:              cfg,
 		indices:             cfg.IndexRepo,
-		invertedIndex:       cfg.InvertedIndex,
+		InvertedIndex:       cfg.InvertedIndex,
 		shards:              make(map[shard.Key]*Shard),
 		store:               cfg.Datastore,
 		externalCh:          make(chan *task, 128),     // len=128, concurrent external tasks that can be queued up before exercising backpressure.
@@ -350,7 +350,7 @@ func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, erro
 }
 
 func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
-	return d.invertedIndex.GetShardsForMultihash(h)
+	return d.InvertedIndex.GetShardsForMultihash(h)
 }
 
 type RegisterOpts struct {
