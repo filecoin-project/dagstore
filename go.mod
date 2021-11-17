@@ -3,12 +3,13 @@ module github.com/filecoin-project/dagstore
 go 1.16
 
 require (
-	github.com/filecoin-project/go-indexer-core v0.2.3
+	github.com/filecoin-project/go-indexer-core v0.2.4
 	github.com/ipfs/go-block-format v0.0.3
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.4.5
 	github.com/ipfs/go-log/v2 v2.3.0
 	github.com/ipld/go-car/v2 v2.1.0
+	github.com/libp2p/go-libp2p-core v0.9.0
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.3.1-0.20210902112759-1539a079fd61
 	github.com/multiformats/go-multihash v0.0.16

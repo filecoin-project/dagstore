@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 
+	"github.com/libp2p/go-libp2p-core/peer"
+
 	mh "github.com/multiformats/go-multihash"
 
 	carindex "github.com/ipld/go-car/v2/index"
@@ -207,7 +209,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if cfg.TopLevelIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.TopLevelIndex = index.NewInverted(memory.New())
+		cfg.TopLevelIndex = index.NewInverted(memory.New(), peer.ID(""))
 	}
 
 	// handle the datastore.

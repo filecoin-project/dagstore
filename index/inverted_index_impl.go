@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/libp2p/go-libp2p-core/peer"
+
 	"github.com/filecoin-project/go-indexer-core"
 
 	"github.com/multiformats/go-multihash"
@@ -16,12 +18,14 @@ var InvertedIndexErrNotFound = errors.New("multihash not found in Index")
 var _ Inverted = (*indexerCoreIndex)(nil)
 
 type indexerCoreIndex struct {
-	is indexer.Interface
+	is         indexer.Interface
+	selfPeerID peer.ID
 }
 
-func NewInverted(is indexer.Interface) *indexerCoreIndex {
+func NewInverted(is indexer.Interface, selfPeerID peer.ID) *indexerCoreIndex {
 	return &indexerCoreIndex{
-		is: is,
+		is:         is,
+		selfPeerID: selfPeerID,
 	}
 }
 
@@ -29,14 +33,14 @@ func (d *indexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s sh
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// go-indexer-core appends values to the existing values we already have for the key
 		// it also takes care of de-duplicating values.
-		return d.is.Put(valueForShardKey(s), mh)
+		return d.is.Put(valueForShardKey(s, d.selfPeerID), mh)
 	})
 }
 
 func (d *indexerCoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
 	return mhIter.ForEach(func(mh multihash.Multihash) error {
 		// remove the given value i.e. shard key from the index for the given multihash.
-		return d.is.Remove(valueForShardKey(sk), mh)
+		return d.is.Remove(valueForShardKey(sk, d.selfPeerID), mh)
 	})
 }
 
@@ -66,8 +70,9 @@ func shardKeyFromValue(val indexer.Value) shard.Key {
 	return shard.KeyFromString(str)
 }
 
-func valueForShardKey(key shard.Key) indexer.Value {
+func valueForShardKey(key shard.Key, selfPeerID peer.ID) indexer.Value {
 	return indexer.Value{
+		ProviderID:    selfPeerID,
 		ContextID:     []byte(key.String()),
 		MetadataBytes: []byte(key.String()),
 	}
