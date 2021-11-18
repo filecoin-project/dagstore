@@ -139,15 +139,13 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 
 	// add all cids in the shard to the inverted (cid -> []Shard Keys) index.
 	iterableIdx, ok := idx.(carindex.IterableIndex)
-	if !ok {
+	if ok {
+		mhIter := &mhIdx{iterableIdx: iterableIdx}
+		if err := d.TopLevelIndex.AddMultihashesForShard(mhIter, s.key); err != nil {
+			log.Errorw("failed to add shard multihashes to the inverted index", "shard", s.key, "error", err)
+		}
+	} else {
 		log.Errorw("shard index is not iterable", "shard", s.key)
-		return
-	}
-
-	mhIter := &mhIdx{iterableIdx: iterableIdx}
-	if err := d.TopLevelIndex.AddMultihashesForShard(mhIter, s.key); err != nil {
-		log.Errorw("failed to add shard multihashes to the inverted index", "shard", s.key, "error", err)
-		return
 	}
 
 	_ = d.queueTask(&task{op: OpShardMakeAvailable, shard: s}, d.completionCh)
