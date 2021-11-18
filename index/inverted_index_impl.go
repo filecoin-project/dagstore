@@ -22,6 +22,10 @@ type indexerCoreIndex struct {
 	selfPeerID peer.ID
 }
 
+// NewInverted returns a new inverted index that uses `go-indexer-core`
+// as it's storage backend. We use `go-indexer-core` as the backend here
+// as it's been optimized to store (multihash -> Value) kind of data and
+// supports bulk updates via context ID and metadata-deduplication which are useful properties for our use case here.
 func NewInverted(is indexer.Interface, selfPeerID peer.ID) *indexerCoreIndex {
 	return &indexerCoreIndex{
 		is:         is,
@@ -74,6 +78,6 @@ func valueForShardKey(key shard.Key, selfPeerID peer.ID) indexer.Value {
 	return indexer.Value{
 		ProviderID:    selfPeerID,
 		ContextID:     []byte(key.String()),
-		MetadataBytes: []byte(key.String()),
+		MetadataBytes: []byte("N/A"),
 	}
 }
