@@ -81,7 +81,8 @@ func (l *FSIndexRepo) AddFullIndex(key shard.Key, index carindex.Index) (err err
 	defer f.Close()
 
 	// Write the index to the file
-	return carindex.WriteTo(index, f)
+	_, err = carindex.WriteTo(index, f)
+	return err
 }
 
 func (l *FSIndexRepo) DropFullIndex(key shard.Key) (dropped bool, err error) {
