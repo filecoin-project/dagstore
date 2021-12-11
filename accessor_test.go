@@ -32,6 +32,7 @@ import (
 // Both the FileMount and the Upgrader fall in that category.
 func TestMmap(t *testing.T) {
 	run := func(t *testing.T, mnt mount.Mount, expect bool, name string) {
+		ctx := context.TODO()
 		// create three shard accessors, with a blockstore each.
 		var accessors []*ShardAccessor
 		accessors = append(accessors, createAccessor(t, mnt))
@@ -47,7 +48,7 @@ func TestMmap(t *testing.T) {
 		}
 
 		// works.
-		blk, err := bss[0].Get(testdata.RootCID)
+		blk, err := bss[0].Get(ctx, testdata.RootCID)
 		require.NoError(t, err)
 		require.NotNil(t, blk)
 
@@ -58,12 +59,12 @@ func TestMmap(t *testing.T) {
 		require.NoError(t, err)
 
 		// works.
-		blk, err = bss[1].Get(testdata.RootCID)
+		blk, err = bss[1].Get(ctx, testdata.RootCID)
 		require.NoError(t, err)
 		require.NotNil(t, blk)
 
 		// works.
-		blk, err = bss[2].Get(testdata.RootCID)
+		blk, err = bss[2].Get(ctx, testdata.RootCID)
 		require.NoError(t, err)
 		require.NotNil(t, blk)
 

@@ -121,7 +121,7 @@ func (m *MemIndexRepo) indexSize(k shard.Key) (uint64, error) {
 	// Could optimize by memoizing this although I don't think it's necessary
 	// as the memory index repo is likely only used in tests.
 	var buff bytes.Buffer
-	err := index.WriteTo(idx, &buff)
+	_, err := index.WriteTo(idx, &buff)
 	if err != nil {
 		return 0, err
 	}

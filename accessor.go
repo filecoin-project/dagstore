@@ -21,9 +21,9 @@ import (
 // ReadBlockstore is a read-only view of Blockstores. This will be implemented
 // by the CARv2 indexed blockstore.
 type ReadBlockstore interface {
-	Has(cid.Cid) (bool, error)
-	Get(cid.Cid) (blocks.Block, error)
-	GetSize(cid.Cid) (int, error)
+	Has(context.Context, cid.Cid) (bool, error)
+	Get(context.Context, cid.Cid) (blocks.Block, error)
+	GetSize(context.Context, cid.Cid) (int, error)
 	AllKeysChan(ctx context.Context) (<-chan cid.Cid, error)
 	HashOnRead(enabled bool)
 }

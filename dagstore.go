@@ -511,7 +511,7 @@ func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
 func (d *DAGStore) Close() error {
 	d.cancelFn()
 	d.wg.Wait()
-	_ = d.store.Sync(ds.Key{})
+	_ = d.store.Sync(context.TODO(), ds.Key{})
 	return nil
 }
 
@@ -525,7 +525,7 @@ func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
 }
 
 func (d *DAGStore) restoreState() error {
-	results, err := d.store.Query(query.Query{})
+	results, err := d.store.Query(context.TODO(), query.Query{})
 	if err != nil {
 		return fmt.Errorf("failed to recover dagstore state from store: %w", err)
 	}
