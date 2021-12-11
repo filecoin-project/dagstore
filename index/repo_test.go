@@ -60,7 +60,7 @@ func (s *fullIndexRepoSuite) TestAllMethods() {
 
 	// Verify the size of the index is correct
 	var b bytes.Buffer
-	err = carindex.WriteTo(idx, &b)
+	_, err = carindex.WriteTo(idx, &b)
 	require.NoError(t, err)
 	expStatSize := b.Len()
 

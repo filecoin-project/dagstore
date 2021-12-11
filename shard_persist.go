@@ -1,6 +1,7 @@
 package dagstore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,16 +84,17 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 // persist persists the shard's state into the supplied Datastore. It calls
 // MarshalJSON, which requires holding a shard lock to be safe.
 func (s *Shard) persist(store ds.Datastore) error {
+	ctx := context.TODO()
 	ps, err := s.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("failed to serialize shard state: %w", err)
 	}
 	// assuming that the datastore is namespaced if need be.
 	k := ds.NewKey(s.key.String())
-	if err := store.Put(k, ps); err != nil {
+	if err := store.Put(ctx, k, ps); err != nil {
 		return fmt.Errorf("failed to put shard state: %w", err)
 	}
-	if err := store.Sync(ds.Key{}); err != nil {
+	if err := store.Sync(ctx, ds.Key{}); err != nil {
 		return fmt.Errorf("failed to sync shard state to store: %w", err)
 	}
 	return nil
