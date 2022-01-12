@@ -7,7 +7,7 @@ require (
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.5.0
 	github.com/ipfs/go-log/v2 v2.3.0
-	github.com/ipld/go-car/v2 v2.1.1-0.20211211000942-be2525f6bf2d
+	github.com/ipld/go-car/v2 v2.1.1
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.3.1-0.20210902112759-1539a079fd61
 	github.com/stretchr/testify v1.7.0
