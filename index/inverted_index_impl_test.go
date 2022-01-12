@@ -1,9 +1,13 @@
 package index
 
 import (
+	"crypto/rand"
 	"testing"
 
-	"github.com/filecoin-project/go-indexer-core/store/memory"
+	"github.com/libp2p/go-libp2p-core/crypto"
+	"github.com/libp2p/go-libp2p-core/peer"
+
+	"github.com/filecoin-project/go-indexer-core/store/storethehash"
 
 	"golang.org/x/xerrors"
 
@@ -20,11 +24,9 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 	cid1, err := cid.Parse("Qmard76Snyj9VCJBzLSLYzXnJJ2BnyCN2KAfAkpLXyt1q7")
 	req.NoError(err)
 
-	idx := NewInverted(memory.New())
-
-	l, err := idx.Size()
-	req.NoError(err)
-	req.EqualValues(0, l)
+	store, err := storethehash.New(t.TempDir())
+	require.NoError(t, err)
+	idx := NewInverted(store, genRandPeer(t))
 
 	_, err = idx.GetShardsForMultihash(cid1.Hash())
 	req.True(xerrors.Is(err, InvertedIndexErrNotFound))
@@ -44,7 +46,9 @@ func TestDatastoreIndex(t *testing.T) {
 	h2 := cid2.Hash()
 	h3 := cid3.Hash()
 
-	idx := NewInverted(memory.New())
+	store, err := storethehash.New(t.TempDir())
+	require.NoError(t, err)
+	idx := NewInverted(store, genRandPeer(t))
 
 	// Add hash to shard key mappings for h1, h2:
 	// h1 -> [shard-key-1]
@@ -89,7 +93,9 @@ func TestDatastoreIndexDelete(t *testing.T) {
 	h1 := cid1.Hash()
 	h2 := cid2.Hash()
 
-	idx := NewInverted(memory.New())
+	store, err := storethehash.New(t.TempDir())
+	require.NoError(t, err)
+	idx := NewInverted(store, genRandPeer(t))
 
 	// Add hash to shard key mappings for h1, h2:
 	// h1 -> [shard-key-1]
@@ -123,4 +129,13 @@ func (mi *mhIt) ForEach(f func(mh multihash.Multihash) error) error {
 		}
 	}
 	return nil
+}
+
+func genRandPeer(t *testing.T) peer.ID {
+	priv, _, err := crypto.GenerateRSAKeyPair(2048, rand.Reader)
+	require.NoError(t, err)
+
+	id, err := peer.IDFromPrivateKey(priv)
+	require.NoError(t, err)
+	return id
 }
