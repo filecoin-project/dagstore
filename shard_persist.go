@@ -83,8 +83,7 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 
 // persist persists the shard's state into the supplied Datastore. It calls
 // MarshalJSON, which requires holding a shard lock to be safe.
-func (s *Shard) persist(store ds.Datastore) error {
-	ctx := context.TODO()
+func (s *Shard) persist(ctx context.Context, store ds.Datastore) error {
 	ps, err := s.MarshalJSON()
 	if err != nil {
 		return fmt.Errorf("failed to serialize shard state: %w", err)
