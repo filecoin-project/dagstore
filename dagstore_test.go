@@ -322,7 +322,7 @@ func TestRestartRestoresState(t *testing.T) {
 		_ = acquireShard(t, dagst, k, 4)
 	}
 
-	res, err := store.Query(dsq.Query{})
+	res, err := store.Query(context.TODO(), dsq.Query{})
 	require.NoError(t, err)
 	entries, err := res.Rest()
 	require.NoError(t, err)
@@ -1417,7 +1417,7 @@ func acquireShard(t *testing.T, dagst *DAGStore, k shard.Key, n int) []*ShardAcc
 				return fmt.Errorf("expected state ShardStateServing; was: %s", state.ShardState)
 			}
 
-			if _, err := bs.Get(testdata.RootCID); err != nil {
+			if _, err := bs.Get(context.TODO(), testdata.RootCID); err != nil {
 				return err
 			}
 

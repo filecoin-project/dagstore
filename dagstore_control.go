@@ -306,7 +306,7 @@ func (d *DAGStore) control() {
 		}
 
 		// persist the current shard state.
-		if err := s.persist(d.config.Datastore); err != nil { // TODO maybe fail shard?
+		if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 		}
 

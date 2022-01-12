@@ -61,7 +61,7 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 		res.Shards[s.key] = err
 
 		// flush the shard state to the datastore.
-		if err := s.persist(d.config.Datastore); err != nil {
+		if err := s.persist(d.ctx, d.config.Datastore); err != nil {
 			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 		}
 		s.lk.RUnlock()
