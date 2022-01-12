@@ -548,7 +548,7 @@ func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
 func (d *DAGStore) Close() error {
 	d.cancelFn()
 	d.wg.Wait()
-	_ = d.store.Sync(d.ctx, ds.Key{})
+	_ = d.store.Sync(context.TODO(), ds.Key{})
 	return nil
 }
 
