@@ -1,6 +1,8 @@
 package shard
 
 import (
+	"encoding/json"
+
 	"github.com/ipfs/go-cid"
 	"github.com/mr-tron/base58"
 )
@@ -31,4 +33,16 @@ func KeyFromCID(cid cid.Cid) Key {
 // String returns the string representation for this key.
 func (k Key) String() string {
 	return k.str
+}
+
+//
+// We need a custom JSON marshaller and unmarshaller because str is a
+// private field
+//
+func (k Key) MarshalJSON() ([]byte, error) {
+	return json.Marshal(k.str)
+}
+
+func (k *Key) UnmarshalJSON(bz []byte) error {
+	return json.Unmarshal(bz, &k.str)
 }
