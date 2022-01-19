@@ -120,7 +120,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	var idx carindex.Index
 	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
 		var err error
-		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true))
+		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true), car.StoreIdentityCIDs(true))
 		if err == nil {
 			log.Debugw("initialize: finished generating index for shard", "shard", s.key)
 		} else {
