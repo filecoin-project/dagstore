@@ -26,5 +26,5 @@ type Interface interface {
 	ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error)
 	GC(ctx context.Context) (*GCResult, error)
 	Close() error
-	AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error)
+	AllShardsReadBlockstore(shardSelector ShardSelectorF, maxBSCachesize int, maxBlkCachesize int) (blockstore.Blockstore, error)
 }

@@ -21,30 +21,51 @@ type AllShardsReadBlockstore struct {
 	d            *DAGStore
 	shardSelectF ShardSelectorF
 
-	bsCache *lru.ARCCache // thread-safe
+	// caches the carV1 payload stream and the carv2 index for shard read affinity i.e. further reads will likely be from the same shard.
+	// shard key -> read only blockstore (CARV1 stream + CARv2 Index)
+	bsCache *lru.ARCCache
+
+	// caches the blocks themselves -> can be scaled by using a redis/memcache etc distributed cache
+	// multihash -> block
+	blkCache *lru.ARCCache
 }
 
-func (d *DAGStore) AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
-	lru, err := lru.NewARC(maxCacheSize)
+func (d *DAGStore) AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCacheSize int, maxBlocks int) (blockstore.Blockstore, error) {
+	bslru, err := lru.NewARC(maxCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create lru cache for read only blockstores")
+	}
+	blkLru, err := lru.NewARC(maxBlocks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create lru cache for blocks: %w", err)
 	}
 
 	return &AllShardsReadBlockstore{
 		d:            d,
 		shardSelectF: shardSelector,
-		bsCache:      lru,
+		bsCache:      bslru,
+		blkCache:     blkLru,
 	}, nil
 
 }
 
 func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) { // get all the shards containing the mh
-	shards, err := ro.d.ShardsContainingMultihash(c.Hash())
+	mhash := c.Hash()
+	// do we have the block cached ?
+	if val, ok := ro.blkCache.Get(mhash); ok {
+		return val.(blocks.Block), nil
+	}
+
+	// fetch all the shards containing the multihash
+	shards, err := ro.d.ShardsContainingMultihash(mhash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch shards containing the block: %w", err)
 	}
+	if len(shards) == 0 {
+		return nil, errors.New("no shards contain the requested block")
+	}
 
-	// do we have a cached blockstore for a shard containing the given cid ? If yes, serve the block from that cid
+	// do we have a cached blockstore for a shard containing the required block ? If yes, serve the block from that shard
 	for _, sk := range shards {
 		// a valid cache hit here updates the priority of the shard's blockstore in the LRU cache.
 		val, ok := ro.bsCache.Get(sk)
@@ -58,6 +79,9 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 			ro.bsCache.Remove(sk)
 			continue
 		}
+
+		// add the block to the block cache
+		ro.blkCache.Add(mhash, blk)
 		return blk, nil
 	}
 
@@ -90,10 +114,16 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 		return nil, fmt.Errorf("failed top load read only blockstore for shard %s: %w", sk, err)
 	}
 
-	// update lru cache
-	ro.bsCache.Add(sk, bs)
+	blk, err := bs.Get(ctx, c)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block: %w", err)
+	}
 
-	return bs.Get(ctx, c)
+	// update lru caches
+	ro.bsCache.Add(sk, bs)
+	ro.blkCache.Add(mhash, blk)
+
+	return blk, nil
 }
 
 func (ro *AllShardsReadBlockstore) Has(_ context.Context, c cid.Cid) (bool, error) {
@@ -116,8 +146,13 @@ func (ro *AllShardsReadBlockstore) HashOnRead(_ bool) {
 }
 
 // GetSize returns the CIDs mapped BlockSize
-func (ro *AllShardsReadBlockstore) GetSize(context.Context, cid.Cid) (int, error) {
-	return 100000000000, nil
+func (ro *AllShardsReadBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
+	blk, err := ro.Get(ctx, c)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get block: %w", err)
+	}
+
+	return len(blk.RawData()), nil
 }
 func (ro *AllShardsReadBlockstore) DeleteBlock(context.Context, cid.Cid) error {
 	return errors.New("unsupported operation DeleteBlock")
