@@ -52,7 +52,7 @@ func (d *DAGStore) AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCach
 func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) { // get all the shards containing the mh
 	mhash := c.Hash()
 	// do we have the block cached ?
-	if val, ok := ro.blkCache.Get(mhash); ok {
+	if val, ok := ro.blkCache.Get(mhash.String()); ok {
 		return val.(blocks.Block), nil
 	}
 
@@ -81,7 +81,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 		}
 
 		// add the block to the block cache
-		ro.blkCache.Add(mhash, blk)
+		ro.blkCache.Add(mhash.String(), blk)
 		return blk, nil
 	}
 
@@ -121,7 +121,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 
 	// update lru caches
 	ro.bsCache.Add(sk, bs)
-	ro.blkCache.Add(mhash, blk)
+	ro.blkCache.Add(mhash.String(), blk)
 
 	return blk, nil
 }
