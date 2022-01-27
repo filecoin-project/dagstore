@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	logging "github.com/ipfs/go-log/v2"
+
 	"github.com/filecoin-project/dagstore/shard"
 	lru "github.com/hashicorp/golang-lru"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/ipfs/go-cid"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 )
+
+var logbs = logging.Logger("dagstore_all_bs")
 
 var _ blockstore.Blockstore = (*AllShardsReadBlockstore)(nil)
 
@@ -57,10 +61,18 @@ func (d *DAGStore) AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCach
 
 }
 
-func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) { // get all the shards containing the mh
+func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (b blocks.Block, finalErr error) { // get all the shards containing the mh
+	logbs.Infow("bitswap Get", "cid", c)
+	defer func() {
+		if finalErr != nil {
+			logbs.Errorw("bitswap Get: got error", "cid", c, "error", finalErr)
+		}
+	}()
+
 	mhash := c.Hash()
 	// do we have the block cached ?
 	if val, ok := ro.blkCache.Get(mhash.String()); ok {
+		logbs.Infow("bitswap Get: returning from block cache", "cid", c)
 		return val.(blocks.Block), nil
 	}
 
@@ -89,6 +101,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 		}
 
 		// add the block to the block cache
+		logbs.Infow("bitswap Get: returning from block store cache", "cid", c)
 		ro.blkCache.Add(mhash.String(), blk)
 		return blk, nil
 	}
@@ -132,21 +145,31 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 	ro.bsCache.Add(sk, &accessorWithBlockstore{sa, bs})
 	ro.blkCache.Add(mhash.String(), blk)
 
+	logbs.Infow("bitswap Get: returning after creating new blockstore", "cid", c)
 	return blk, nil
 }
 
 func (ro *AllShardsReadBlockstore) Has(_ context.Context, c cid.Cid) (bool, error) {
+	logbs.Infow("bitswap Has", "cid", c)
+
 	shards, err := ro.d.ShardsContainingMultihash(c.Hash())
 	if err != nil {
+		logbs.Errorw("bitswap Has", "cid", c, "error", err)
 		return false, fmt.Errorf("failed to fetch shards containing the multihash %w", err)
+	}
+	if len(shards) == 0 {
+		logbs.Infow("bitswap Has: returning false no error", "cid", c)
+		return false, nil
 	}
 
 	// if there is a shard we can serve the retrieval from, we have the requested cid.
 	_, err = ro.shardSelectF(c, shards)
 	if err != nil {
+		logbs.Errorw("bitswap Has", "cid", c, "err", err)
 		return false, fmt.Errorf("failed to select a shard: %w", err)
 	}
 
+	logbs.Infow("bitswap Has: returning true", "cid", c)
 	return true, nil
 }
 
@@ -156,11 +179,15 @@ func (ro *AllShardsReadBlockstore) HashOnRead(_ bool) {
 
 // GetSize returns the CIDs mapped BlockSize
 func (ro *AllShardsReadBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
+	logbs.Infow("bitswap GetSize", "cid", c)
+
 	blk, err := ro.Get(ctx, c)
 	if err != nil {
+		logbs.Errorw("bitswap GetSize error", "cid", c, "error", err)
 		return 0, fmt.Errorf("failed to get block: %w", err)
 	}
 
+	logbs.Infow("bitswap GetSize success", "cid", c)
 	return len(blk.RawData()), nil
 }
 func (ro *AllShardsReadBlockstore) DeleteBlock(context.Context, cid.Cid) error {
