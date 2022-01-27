@@ -17,13 +17,18 @@ var _ blockstore.Blockstore = (*AllShardsReadBlockstore)(nil)
 
 type ShardSelectorF func(c cid.Cid, shards []shard.Key) (shard.Key, error)
 
+type accessorWithBlockstore struct {
+	sa *ShardAccessor
+	bs ReadBlockstore
+}
+
 type AllShardsReadBlockstore struct {
 	d            *DAGStore
 	shardSelectF ShardSelectorF
 
 	// caches the carV1 payload stream and the carv2 index for shard read affinity i.e. further reads will likely be from the same shard.
 	// shard key -> read only blockstore (CARV1 stream + CARv2 Index)
-	bsCache *lru.ARCCache
+	bsCache *lru.Cache
 
 	// caches the blocks themselves -> can be scaled by using a redis/memcache etc distributed cache
 	// multihash -> block
@@ -31,7 +36,10 @@ type AllShardsReadBlockstore struct {
 }
 
 func (d *DAGStore) AllShardsReadBlockstore(shardSelector ShardSelectorF, maxCacheSize int, maxBlocks int) (blockstore.Blockstore, error) {
-	bslru, err := lru.NewARC(maxCacheSize)
+	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
+		abs := val.(*accessorWithBlockstore)
+		abs.sa.Close()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create lru cache for read only blockstores")
 	}
@@ -73,7 +81,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 			continue
 		}
 
-		rbs := val.(ReadBlockstore)
+		rbs := val.(*accessorWithBlockstore).bs
 		blk, err := rbs.Get(ctx, c)
 		if err != nil {
 			ro.bsCache.Remove(sk)
@@ -109,7 +117,8 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 		}
 	}
 
-	bs, err := res.Accessor.Blockstore()
+	sa := res.Accessor
+	bs, err := sa.Blockstore()
 	if err != nil {
 		return nil, fmt.Errorf("failed top load read only blockstore for shard %s: %w", sk, err)
 	}
@@ -120,7 +129,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.B
 	}
 
 	// update lru caches
-	ro.bsCache.Add(sk, bs)
+	ro.bsCache.Add(sk, &accessorWithBlockstore{sa, bs})
 	ro.blkCache.Add(mhash.String(), blk)
 
 	return blk, nil
