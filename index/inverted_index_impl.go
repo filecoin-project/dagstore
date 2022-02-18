@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ipfs/go-datastore/namespace"
+
 	ds "github.com/ipfs/go-datastore"
 
 	"github.com/multiformats/go-multihash"
@@ -22,9 +24,10 @@ type invertedIndexImpl struct {
 // as it's storage backend. We use `go-indexer-core` as the backend here
 // as it's been optimized to store (multihash -> Value) kind of data and
 // supports bulk updates via context ID and metadata-deduplication which are useful properties for our use case here.
-func NewInverted(ds ds.Batching) *invertedIndexImpl {
+func NewInverted(dts ds.Batching) *invertedIndexImpl {
+	dts = namespace.Wrap(dts, ds.NewKey("/inverted/index"))
 	return &invertedIndexImpl{
-		ds: ds,
+		ds: dts,
 	}
 }
 
