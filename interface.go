@@ -21,7 +21,7 @@ type Interface interface {
 	GetShardInfo(k shard.Key) (ShardInfo, error)
 	GetIterableIndex(key shard.Key) (carindex.IterableIndex, error)
 	AllShardsInfo() AllShardsInfo
-	ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error)
+	ShardsContainingMultihash(ctx context.Context, h mh.Multihash) ([]shard.Key, error)
 	GC(ctx context.Context) (*GCResult, error)
 	Close() error
 }

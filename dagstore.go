@@ -7,13 +7,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/libp2p/go-libp2p-core/peer"
-
 	mh "github.com/multiformats/go-multihash"
 
 	carindex "github.com/ipld/go-car/v2/index"
-
-	"github.com/filecoin-project/go-indexer-core/store/memory"
 
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
@@ -209,7 +205,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if cfg.TopLevelIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.TopLevelIndex = index.NewInverted(memory.New(), peer.ID(""))
+		cfg.TopLevelIndex = index.NewInverted(ds.NewMapDatastore())
 	}
 
 	// handle the datastore.
@@ -351,8 +347,8 @@ func (d *DAGStore) GetIterableIndex(key shard.Key) (carindex.IterableIndex, erro
 	return ii, nil
 }
 
-func (d *DAGStore) ShardsContainingMultihash(h mh.Multihash) ([]shard.Key, error) {
-	return d.TopLevelIndex.GetShardsForMultihash(h)
+func (d *DAGStore) ShardsContainingMultihash(ctx context.Context, h mh.Multihash) ([]shard.Key, error) {
+	return d.TopLevelIndex.GetShardsForMultihash(ctx, h)
 }
 
 type RegisterOpts struct {

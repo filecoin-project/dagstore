@@ -133,6 +133,7 @@ func TestRegisterCarV1(t *testing.T) {
 }
 
 func TestRegisterCarV2(t *testing.T) {
+	ctx := context.Background()
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
@@ -168,7 +169,7 @@ func TestRegisterCarV2(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ii)
 	err = ii.ForEach(func(h multihash.Multihash, _ uint64) error {
-		k2, err := dagst.ShardsContainingMultihash(h)
+		k2, err := dagst.ShardsContainingMultihash(ctx, h)
 		if err != nil {
 			return err
 		}
