@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ipfs/go-datastore/sync"
+
 	ds "github.com/ipfs/go-datastore"
 
 	"golang.org/x/xerrors"
@@ -22,7 +24,7 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 	cid1, err := cid.Parse("Qmard76Snyj9VCJBzLSLYzXnJJ2BnyCN2KAfAkpLXyt1q7")
 	req.NoError(err)
 
-	idx := NewInverted(ds.NewMapDatastore())
+	idx := NewInverted(sync.MutexWrap(ds.NewMapDatastore()))
 
 	_, err = idx.GetShardsForMultihash(ctx, cid1.Hash())
 	req.True(xerrors.Is(err, ds.ErrNotFound))
@@ -43,7 +45,7 @@ func TestDatastoreIndex(t *testing.T) {
 	h2 := cid2.Hash()
 	h3 := cid3.Hash()
 
-	idx := NewInverted(ds.NewMapDatastore())
+	idx := NewInverted(sync.MutexWrap(ds.NewMapDatastore()))
 
 	// Add hash to shard key mappings for h1, h2:
 	// h1 -> [shard-key-1]
