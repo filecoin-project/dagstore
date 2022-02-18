@@ -85,6 +85,10 @@ func (d *invertedIndexImpl) AddMultihashesForShard(ctx context.Context, mhIter M
 		return fmt.Errorf("failed to commit batch: %w", err)
 	}
 
+	if err := d.ds.Sync(ctx, ds.Key{}); err != nil {
+		return fmt.Errorf("failed to sync puts: %w", err)
+	}
+
 	return nil
 }
 
