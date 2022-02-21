@@ -15,7 +15,6 @@ import (
 	"github.com/ipfs/go-datastore/namespace"
 	"github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
-	ipsync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
 
 	"github.com/filecoin-project/dagstore/index"
@@ -206,7 +205,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if cfg.TopLevelIndex == nil {
 		log.Info("using in-memory inverted index")
-		cfg.TopLevelIndex = index.NewInverted(ipsync.MutexWrap(ds.NewMapDatastore()))
+		cfg.TopLevelIndex = index.NewInverted(dssync.MutexWrap(ds.NewMapDatastore()))
 	}
 
 	// handle the datastore.

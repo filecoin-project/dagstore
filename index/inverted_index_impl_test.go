@@ -4,6 +4,11 @@ import (
 	"context"
 	"testing"
 
+	blocksutil "github.com/ipfs/go-ipfs-blocksutil"
+
+	levelds "github.com/ipfs/go-ds-leveldb"
+	ldbopts "github.com/syndtr/goleveldb/leveldb/opt"
+
 	"github.com/ipfs/go-datastore/sync"
 
 	ds "github.com/ipfs/go-datastore"
@@ -17,6 +22,8 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
+var blockGenerator = blocksutil.NewBlockGenerator()
+
 func TestDatastoreIndexEmpty(t *testing.T) {
 	ctx := context.Background()
 	req := require.New(t)
@@ -28,6 +35,34 @@ func TestDatastoreIndexEmpty(t *testing.T) {
 
 	_, err = idx.GetShardsForMultihash(ctx, cid1.Hash())
 	req.True(xerrors.Is(err, ds.ErrNotFound))
+}
+
+func TestLevelDBBatch(t *testing.T) {
+	ctx := context.Background()
+	// Create a new LevelDB datastore
+	dstore, err := levelds.NewDatastore(t.TempDir(), &levelds.Options{
+		Compression: ldbopts.NoCompression,
+		NoSync:      false,
+		Strict:      ldbopts.StrictAll,
+		ReadOnly:    false,
+	})
+	require.NoError(t, err)
+	idx := NewInverted(dstore)
+
+	// add 50,000 multihashes
+	mhs := GenerateMhs(100000)
+	require.Len(t, mhs, 100000)
+	itIdxA := &mhIt{mhs}
+	sk1 := shard.KeyFromString("shard-key-1")
+	err = idx.AddMultihashesForShard(ctx, itIdxA, sk1)
+	require.NoError(t, err)
+
+	for _, mh := range mhs {
+		sk, err := idx.GetShardsForMultihash(ctx, mh)
+		require.NoError(t, err)
+		require.Len(t, sk, 1)
+		require.Contains(t, sk, sk1)
+	}
 }
 
 func TestDatastoreIndex(t *testing.T) {
@@ -47,10 +82,10 @@ func TestDatastoreIndex(t *testing.T) {
 
 	idx := NewInverted(sync.MutexWrap(ds.NewMapDatastore()))
 
-	// Add hash to shard key mappings for h1, h2:
+	// Add hash to shard key mappings for h1, h2: also dedupes the multihash iterator
 	// h1 -> [shard-key-1]
 	// h2 -> [shard-key-1]
-	itIdxA := &mhIt{[]multihash.Multihash{h1, h2}}
+	itIdxA := &mhIt{[]multihash.Multihash{h1, h2, h1, h1}}
 	sk1 := shard.KeyFromString("shard-key-1")
 	err = idx.AddMultihashesForShard(ctx, itIdxA, sk1)
 	req.NoError(err)
@@ -97,4 +132,14 @@ func (mi *mhIt) ForEach(f func(mh multihash.Multihash) error) error {
 		}
 	}
 	return nil
+}
+
+// GenerateCids produces n content identifiers.
+func GenerateMhs(n int) []multihash.Multihash {
+	mhs := make([]multihash.Multihash, 0, n)
+	for i := 0; i < n; i++ {
+		c := blockGenerator.Next().Cid()
+		mhs = append(mhs, c.Hash())
+	}
+	return mhs
 }

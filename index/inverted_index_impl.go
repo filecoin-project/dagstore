@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/ipfs/go-datastore/namespace"
 
@@ -17,6 +18,7 @@ import (
 var _ Inverted = (*invertedIndexImpl)(nil)
 
 type invertedIndexImpl struct {
+	mu sync.Mutex
 	ds ds.Batching
 }
 
@@ -32,14 +34,23 @@ func NewInverted(dts ds.Batching) *invertedIndexImpl {
 }
 
 func (d *invertedIndexImpl) AddMultihashesForShard(ctx context.Context, mhIter MultihashIterator, s shard.Key) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	mhmap := make(map[string]struct{})
+
 	batch, err := d.ds.Batch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
 	if err := mhIter.ForEach(func(mh multihash.Multihash) error {
-		key := ds.NewKey(string(mh))
+		// if we already added a mapping for the given (multihash -> shard key) for this iterator. nothing to do here
+		if _, ok := mhmap[string(mh)]; ok {
+			return nil
+		}
 
+		key := ds.NewKey(string(mh))
 		// do we already have an entry for this multihash ?
 		val, err := d.ds.Get(ctx, key)
 		if err != nil && err != ds.ErrNotFound {
@@ -79,6 +90,7 @@ func (d *invertedIndexImpl) AddMultihashesForShard(ctx context.Context, mhIter M
 			return fmt.Errorf("failed to put mh=%s, err%w", mh, err)
 		}
 
+		mhmap[string(mh)] = struct{}{}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to add index entry: %w", err)
