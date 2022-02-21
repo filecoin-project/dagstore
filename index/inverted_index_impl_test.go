@@ -49,7 +49,7 @@ func TestLevelDBBatch(t *testing.T) {
 	require.NoError(t, err)
 	idx := NewInverted(dstore)
 
-	// add 50,000 multihashes
+	// add 100,000 multihashes
 	mhs := GenerateMhs(100000)
 	require.Len(t, mhs, 100000)
 	itIdxA := &mhIt{mhs}
@@ -134,7 +134,7 @@ func (mi *mhIt) ForEach(f func(mh multihash.Multihash) error) error {
 	return nil
 }
 
-// GenerateCids produces n content identifiers.
+// GenerateMhs produces n mutlihashes.
 func GenerateMhs(n int) []multihash.Multihash {
 	mhs := make([]multihash.Multihash, 0, n)
 	for i := 0; i < n; i++ {
