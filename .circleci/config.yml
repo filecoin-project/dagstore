@@ -19,3 +19,4 @@ jobs:
           covermode: atomic
           failfast: true
           race: true
+          verbose: true

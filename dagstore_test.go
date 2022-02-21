@@ -208,9 +208,6 @@ func TestRegisterConcurrentShards(t *testing.T) {
 	t.Run("8", func(t *testing.T) { run(t, 8) })
 	t.Run("16", func(t *testing.T) { run(t, 16) })
 	t.Run("32", func(t *testing.T) { run(t, 32) })
-	t.Run("64", func(t *testing.T) { run(t, 64) })
-	t.Run("128", func(t *testing.T) { run(t, 128) })
-	t.Run("256", func(t *testing.T) { run(t, 256) })
 }
 
 func TestAcquireInexistentShard(t *testing.T) {
