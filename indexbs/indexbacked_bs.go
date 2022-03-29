@@ -193,8 +193,9 @@ func (ro *IndexBackedBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, e
 	return len(blk.RawData()), nil
 }
 
-func (ro *IndexBackedBlockstore) readFromBSCacheUnlocked(ctx context.Context, c cid.Cid, sk shard.Key) (blocks.Block, error) {
-	val, ok := ro.blockstoreCache.Get(sk)
+func (ro *IndexBackedBlockstore) readFromBSCacheUnlocked(ctx context.Context, c cid.Cid, shardContainingCid shard.Key) (blocks.Block, error) {
+	// We've already ensured that the given shard has the cid/multihash we are looking for.
+	val, ok := ro.blockstoreCache.Get(shardContainingCid)
 	if !ok {
 		return nil, ErrBlockNotFound
 	}
@@ -205,7 +206,7 @@ func (ro *IndexBackedBlockstore) readFromBSCacheUnlocked(ctx context.Context, c 
 		// we know that the cid we want to lookup belongs to a shard with key `sk` and
 		// so if we fail to get the corresponding block from the blockstore for that shards, something has gone wrong
 		// and we should remove the blockstore for that shard from our cache.
-		ro.blockstoreCache.Remove(sk)
+		ro.blockstoreCache.Remove(shardContainingCid)
 		return nil, err
 	}
 
