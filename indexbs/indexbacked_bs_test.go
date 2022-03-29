@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/filecoin-project/dagstore"
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/testdata"
@@ -53,24 +55,50 @@ func TestReadOnlyBs(t *testing.T) {
 	it, err := dagst.GetIterableIndex(sk)
 	require.NoError(t, err)
 
-	it.ForEach(func(mh multihash.Multihash, u uint64) error {
-		c := cid.NewCidV1(cid.Raw, mh)
+	var errg errgroup.Group
 
-		has, err := rbs.Has(ctx, c)
-		require.NoError(t, err)
-		require.True(t, has)
+	it.ForEach(func(mh multihash.Multihash, _ uint64) error {
 
-		blk, err := rbs.Get(ctx, c)
-		require.NoError(t, err)
-		require.NotEmpty(t, blk)
+		mhs := mh
+		errg.Go(func() error {
+			c := cid.NewCidV1(cid.Raw, mhs)
 
-		sz, err := rbs.GetSize(ctx, c)
-		require.NoError(t, err)
-		require.EqualValues(t, len(blk.RawData()), sz)
+			// Has
+			has, err := rbs.Has(ctx, c)
+			if err != nil {
+				return err
+			}
+			if !has {
+				return errors.New("has should be true")
+			}
 
-		require.EqualValues(t, c, blk.Cid())
+			// Get
+			blk, err := rbs.Get(ctx, c)
+			if err != nil {
+				return err
+			}
+			if blk == nil {
+				return errors.New("block should not be empty")
+			}
+
+			// GetSize
+			_, err = rbs.GetSize(ctx, c)
+			if err != nil {
+				return err
+			}
+
+			// ensure cids match
+			if blk.Cid() != c {
+				return errors.New("cid mismatch")
+			}
+			return nil
+
+		})
+
 		return nil
 	})
+
+	require.NoError(t, errg.Wait())
 
 	// ------------------------------------------
 	// Now test with a shard selector that rejects everything and ensure we always see errors
