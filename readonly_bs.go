@@ -119,7 +119,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (b blocks
 		return nil, fmt.Errorf("failed to select a shard: %w", err)
 	}
 
-	// load blockstore for the selected shard and tru to serve the cid from that blockstore.
+	// load blockstore for the selected shard and try to serve the cid from that blockstore.
 	resch := make(chan ShardResult, 1)
 	if err := ro.d.AcquireShard(ctx, sk, resch, AcquireOpts{}); err != nil {
 		return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
@@ -137,7 +137,7 @@ func (ro *AllShardsReadBlockstore) Get(ctx context.Context, c cid.Cid) (b blocks
 	sa := res.Accessor
 	bs, err := sa.Blockstore()
 	if err != nil {
-		return nil, fmt.Errorf("failed top load read only blockstore for shard %s: %w", sk, err)
+		return nil, fmt.Errorf("failed to load read only blockstore for shard %s: %w", sk, err)
 	}
 
 	blk, err := bs.Get(ctx, c)
