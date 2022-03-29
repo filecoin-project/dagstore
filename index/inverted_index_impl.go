@@ -1,83 +1,124 @@
 package index
 
 import (
-	"errors"
+	"context"
+	"encoding/json"
 	"fmt"
+	"sync"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/ipfs/go-datastore/namespace"
 
-	"github.com/filecoin-project/go-indexer-core"
+	ds "github.com/ipfs/go-datastore"
 
 	"github.com/multiformats/go-multihash"
 
 	"github.com/filecoin-project/dagstore/shard"
 )
 
-var InvertedIndexErrNotFound = errors.New("multihash not found in Index")
+var _ Inverted = (*invertedIndexImpl)(nil)
 
-var _ Inverted = (*indexerCoreIndex)(nil)
-
-type indexerCoreIndex struct {
-	is         indexer.Interface
-	selfPeerID peer.ID
+type invertedIndexImpl struct {
+	mu sync.Mutex
+	ds ds.Batching
 }
 
 // NewInverted returns a new inverted index that uses `go-indexer-core`
 // as it's storage backend. We use `go-indexer-core` as the backend here
 // as it's been optimized to store (multihash -> Value) kind of data and
 // supports bulk updates via context ID and metadata-deduplication which are useful properties for our use case here.
-func NewInverted(is indexer.Interface, selfPeerID peer.ID) *indexerCoreIndex {
-	return &indexerCoreIndex{
-		is:         is,
-		selfPeerID: selfPeerID,
+func NewInverted(dts ds.Batching) *invertedIndexImpl {
+	dts = namespace.Wrap(dts, ds.NewKey("/inverted/index"))
+	return &invertedIndexImpl{
+		ds: dts,
 	}
 }
 
-func (d *indexerCoreIndex) AddMultihashesForShard(mhIter MultihashIterator, s shard.Key) error {
-	return mhIter.ForEach(func(mh multihash.Multihash) error {
-		// go-indexer-core appends values to the existing values we already have for the key
-		// it also takes care of de-duplicating values.
-		return d.is.Put(valueForShardKey(s, d.selfPeerID), mh)
-	})
-}
+func (d *invertedIndexImpl) AddMultihashesForShard(ctx context.Context, mhIter MultihashIterator, s shard.Key) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-func (d *indexerCoreIndex) DeleteMultihashesForShard(sk shard.Key, mhIter MultihashIterator) error {
-	return mhIter.ForEach(func(mh multihash.Multihash) error {
-		// remove the given value i.e. shard key from the index for the given multihash.
-		return d.is.Remove(valueForShardKey(sk, d.selfPeerID), mh)
-	})
-}
-
-func (d *indexerCoreIndex) GetShardsForMultihash(mh multihash.Multihash) ([]shard.Key, error) {
-	values, found, err := d.is.Get(mh)
+	batch, err := d.ds.Batch(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to lookup index for multihash %s, err: %w", mh, err)
-	}
-	if !found || len(values) == 0 {
-		return nil, fmt.Errorf("cid not found, multihash=%s, err: %w", mh, InvertedIndexErrNotFound)
+		return fmt.Errorf("failed to create ds batch: %w", err)
 	}
 
-	shardKeys := make([]shard.Key, 0, len(values))
-	for _, v := range values {
-		shardKeys = append(shardKeys, shardKeyFromValue(v))
+	if err := mhIter.ForEach(func(mh multihash.Multihash) error {
+		key := ds.NewKey(string(mh))
+		// do we already have an entry for this multihash ?
+		val, err := d.ds.Get(ctx, key)
+		if err != nil && err != ds.ErrNotFound {
+			return fmt.Errorf("failed to get value for multihash %s, err: %w", mh, err)
+		}
+
+		// if we don't have an existing entry for this mh, create one
+		if err == ds.ErrNotFound {
+			s := []shard.Key{s}
+			bz, err := json.Marshal(s)
+			if err != nil {
+				return fmt.Errorf("failed to marshal shard list to bytes: %w", err)
+			}
+			if err := batch.Put(ctx, key, bz); err != nil {
+				return fmt.Errorf("failed to put mh=%s, err=%w", mh, err)
+			}
+			return nil
+		}
+
+		// else , append the shard key to the existing list
+		var es []shard.Key
+		if err := json.Unmarshal(val, &es); err != nil {
+			return fmt.Errorf("failed to unmarshal shard keys: %w", err)
+		}
+
+		// if we already have the shard key indexed for the multihash, nothing to do here.
+		if has(es, s) {
+			return nil
+		}
+
+		es = append(es, s)
+		bz, err := json.Marshal(es)
+		if err != nil {
+			return fmt.Errorf("failed to marshal shard keys: %w", err)
+		}
+		if err := batch.Put(ctx, key, bz); err != nil {
+			return fmt.Errorf("failed to put mh=%s, err%w", mh, err)
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to add index entry: %w", err)
+	}
+
+	if err := batch.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit batch: %w", err)
+	}
+
+	if err := d.ds.Sync(ctx, ds.Key{}); err != nil {
+		return fmt.Errorf("failed to sync puts: %w", err)
+	}
+
+	return nil
+}
+
+func (d *invertedIndexImpl) GetShardsForMultihash(ctx context.Context, mh multihash.Multihash) ([]shard.Key, error) {
+	key := ds.NewKey(string(mh))
+	sbz, err := d.ds.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup index for mh %s, err: %w", mh, err)
+	}
+
+	var shardKeys []shard.Key
+	if err := json.Unmarshal(sbz, &shardKeys); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal shard keys for mh=%s, err=%w", mh, err)
 	}
 
 	return shardKeys, nil
 }
 
-func (d *indexerCoreIndex) Size() (int64, error) {
-	return d.is.Size()
-}
-
-func shardKeyFromValue(val indexer.Value) shard.Key {
-	str := string(val.ContextID)
-	return shard.KeyFromString(str)
-}
-
-func valueForShardKey(key shard.Key, selfPeerID peer.ID) indexer.Value {
-	return indexer.Value{
-		ProviderID:    selfPeerID,
-		ContextID:     []byte(key.String()),
-		MetadataBytes: []byte("N/A"),
+func has(es []shard.Key, k shard.Key) bool {
+	for _, s := range es {
+		if s == k {
+			return true
+		}
 	}
+	return false
 }

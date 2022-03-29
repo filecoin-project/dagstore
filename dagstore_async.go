@@ -141,7 +141,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	iterableIdx, ok := idx.(carindex.IterableIndex)
 	if ok {
 		mhIter := &mhIdx{iterableIdx: iterableIdx}
-		if err := d.TopLevelIndex.AddMultihashesForShard(mhIter, s.key); err != nil {
+		if err := d.TopLevelIndex.AddMultihashesForShard(ctx, mhIter, s.key); err != nil {
 			log.Errorw("failed to add shard multihashes to the inverted index", "shard", s.key, "error", err)
 		}
 	} else {
