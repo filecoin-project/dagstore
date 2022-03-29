@@ -3,8 +3,6 @@ package dagstore
 import (
 	"context"
 
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
-
 	carindex "github.com/ipld/go-car/v2/index"
 	mh "github.com/multiformats/go-multihash"
 
@@ -26,5 +24,4 @@ type Interface interface {
 	ShardsContainingMultihash(ctx context.Context, h mh.Multihash) ([]shard.Key, error)
 	GC(ctx context.Context) (*GCResult, error)
 	Close() error
-	AllShardsReadBlockstore(shardSelector ShardSelectorF, maxBSCachesize int, maxBlkCachesize int) (blockstore.Blockstore, error)
 }

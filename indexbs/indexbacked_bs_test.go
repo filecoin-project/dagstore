@@ -1,9 +1,13 @@
-package dagstore
+package indexbs
 
 import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/filecoin-project/dagstore"
+	"github.com/filecoin-project/dagstore/mount"
+	"github.com/filecoin-project/dagstore/testdata"
 
 	"github.com/multiformats/go-multihash"
 
@@ -18,10 +22,12 @@ var noOpSelector = func(c cid.Cid, shards []shard.Key) (shard.Key, error) {
 	return shards[0], nil
 }
 
+var carv2mnt = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
+
 func TestReadOnlyBs(t *testing.T) {
 	ctx := context.Background()
 	store := dssync.MutexWrap(datastore.NewMapDatastore())
-	dagst, err := NewDAGStore(Config{
+	dagst, err := dagstore.NewDAGStore(dagstore.Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
 		Datastore:     store,
@@ -31,15 +37,20 @@ func TestReadOnlyBs(t *testing.T) {
 	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
-	// two shards containing the same cid
-	keys := registerShards(t, dagst, 2, carv2mnt, RegisterOpts{})
+	// register a shard
+	ch := make(chan dagstore.ShardResult, 1)
+	sk := shard.KeyFromString("test1")
+	err = dagst.RegisterShard(context.Background(), sk, carv2mnt, ch, dagstore.RegisterOpts{})
+	require.NoError(t, err)
+	res := <-ch
+	require.NoError(t, res.Error)
 
-	rbs, err := dagst.AllShardsReadBlockstore(noOpSelector, 10, 10)
+	rbs, err := NewIndexBackedBlockstore(dagst, noOpSelector, 10, 10)
 	require.NoError(t, err)
 
 	// iterate over the CARV2 Index for the given CARv2 file and ensure the readonly blockstore
 	// works for each of those cids
-	it, err := dagst.GetIterableIndex(keys[0])
+	it, err := dagst.GetIterableIndex(sk)
 	require.NoError(t, err)
 
 	it.ForEach(func(mh multihash.Multihash, u uint64) error {
@@ -67,7 +78,7 @@ func TestReadOnlyBs(t *testing.T) {
 		return shard.Key{}, errors.New("rejected")
 	}
 
-	rbs, err = dagst.AllShardsReadBlockstore(fss, 10, 10)
+	rbs, err = NewIndexBackedBlockstore(dagst, fss, 10, 10)
 	require.NoError(t, err)
 	it.ForEach(func(mh multihash.Multihash, u uint64) error {
 		c := cid.NewCidV1(cid.Raw, mh)
@@ -86,5 +97,13 @@ func TestReadOnlyBs(t *testing.T) {
 
 		return nil
 	})
+}
 
+func testRegistry(t *testing.T) *mount.Registry {
+	r := mount.NewRegistry()
+	err := r.Register("fs", &mount.FSMount{FS: testdata.FS})
+	require.NoError(t, err)
+	err = r.Register("counting", new(mount.Counting))
+	require.NoError(t, err)
+	return r
 }
