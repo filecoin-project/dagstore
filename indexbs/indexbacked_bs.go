@@ -43,7 +43,7 @@ type IndexBackedBlockstore struct {
 	blockstoreCache *lru.Cache // caches the blockstore for a given shard for shard read affinity i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
 }
 
-func NewIndexBackedBlockstore(d *dagstore.DAGStore, shardSelector ShardSelectorF, maxCacheSize int, maxBlocks int) (blockstore.Blockstore, error) {
+func NewIndexBackedBlockstore(d *dagstore.DAGStore, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
 	// instantiate the blockstore cache
 	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
 		// ensure we close the blockstore for a shard when it's evicted from the cache so dagstore can gc it.
