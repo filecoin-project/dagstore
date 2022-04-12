@@ -273,6 +273,8 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	var toRegister, toRecover []*Shard
 	for _, s := range d.shards {
 		switch s.state {
+		case ShardStateRecovering:
+			fallthrough
 		case ShardStateErrored:
 			switch d.config.RecoverOnStart {
 			case DoNotRecover:
@@ -282,6 +284,7 @@ func (d *DAGStore) Start(ctx context.Context) error {
 				s.recoverOnNextAcquire = true
 			case RecoverNow:
 				log.Infow("start: recovering failed shard immediately", "shard", s.key, "error", s.err)
+				s.state = ShardStateErrored //force set state to error for recovering shard
 				toRecover = append(toRecover, s)
 			}
 
