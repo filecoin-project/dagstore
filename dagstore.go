@@ -12,8 +12,6 @@ import (
 	carindex "github.com/ipld/go-car/v2/index"
 
 	ds "github.com/ipfs/go-datastore"
-	"github.com/ipfs/go-datastore/namespace"
-	"github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
 	logging "github.com/ipfs/go-log/v2"
 
@@ -72,7 +70,7 @@ type DAGStore struct {
 	shards  map[shard.Key]*Shard
 	config  Config
 	indices index.FullIndexRepo
-	store   ds.Datastore
+	store   PersistStore
 
 	// TopLevelIndex is the top level (cid -> []shards) index that maps a cid to all the shards that is present in.
 	TopLevelIndex index.Inverted
@@ -149,7 +147,7 @@ type Config struct {
 	TopLevelIndex index.Inverted
 
 	// Datastore is the datastore where shard state will be persisted.
-	Datastore ds.Datastore
+	Datastore PersistStore
 
 	// MountRegistry contains the set of recognized mount types.
 	MountRegistry *mount.Registry
@@ -211,11 +209,8 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	// handle the datastore.
 	if cfg.Datastore == nil {
 		log.Warnf("no datastore provided; falling back to in-mem datastore; shard state will not survive restarts")
-		cfg.Datastore = dssync.MutexWrap(ds.NewMapDatastore()) // TODO can probably remove mutex wrap, since access is single-threaded
+		cfg.Datastore = NewDsPersistStore(dssync.MutexWrap(ds.NewMapDatastore())) // TODO can probably remove mutex wrap, since access is single-threaded
 	}
-
-	// namespace all store operations.
-	cfg.Datastore = namespace.Wrap(cfg.Datastore, StoreNamespace)
 
 	if cfg.MountRegistry == nil {
 		cfg.MountRegistry = mount.NewRegistry()
@@ -544,7 +539,7 @@ func (d *DAGStore) GC(ctx context.Context) (*GCResult, error) {
 func (d *DAGStore) Close() error {
 	d.cancelFn()
 	d.wg.Wait()
-	_ = d.store.Sync(context.TODO(), ds.Key{})
+	_ = d.store.Close(context.TODO())
 	return nil
 }
 
@@ -558,18 +553,14 @@ func (d *DAGStore) queueTask(tsk *task, ch chan<- *task) error {
 }
 
 func (d *DAGStore) restoreState() error {
-	results, err := d.store.Query(d.ctx, query.Query{})
+	results, err := d.store.List(d.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to recover dagstore state from store: %w", err)
 	}
-	for {
-		res, ok := results.NextSync()
-		if !ok {
-			return nil
-		}
-		s := &Shard{d: d}
-		if err := s.UnmarshalJSON(res.Value); err != nil {
-			log.Warnf("failed to recover state of shard %s: %s; skipping", shard.KeyFromString(res.Key), err)
+	for _, persistedShard := range results {
+		s, err := fromPersistedShard(d.ctx, d, persistedShard)
+		if err != nil {
+			log.Warnf("failed to recover state of shard %s: %s; skipping", shard.KeyFromString(persistedShard.Key), err)
 			continue
 		}
 
@@ -577,6 +568,7 @@ func (d *DAGStore) restoreState() error {
 			"shard lazy", s.lazy)
 		d.shards[s.key] = s
 	}
+	return nil
 }
 
 // ensureDir checks whether the specified path is a directory, and if not it
