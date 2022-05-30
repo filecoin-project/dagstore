@@ -52,6 +52,4 @@ type Shard struct {
 	wRecover  *waiter   // waiter for recovering an errored shard.
 	wAcquire  []*waiter // waiters for acquiring the shard.
 	wDestroy  *waiter   // waiter for shard destruction.
-
-	refs uint32 // number of DAG accessors currently open
 }

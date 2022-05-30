@@ -27,9 +27,6 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	if err := ctx.Err(); err != nil {
 		log.Warnw("context cancelled while fetching shard; releasing", "shard", s.key, "error", err)
 
-		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
-		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
-
 		// send the shard error to the caller for correctness
 		// since the context is cancelled, the result will be discarded.
 		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
@@ -38,9 +35,6 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	if err != nil {
 		log.Warnw("acquire: failed to fetch from mount upgrader", "shard", s.key, "error", err)
-
-		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
-		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount so we can return the accessor: %w", err)
@@ -58,9 +52,6 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	if err := ctx.Err(); err != nil {
 		log.Warnw("context cancelled while indexing shard; releasing", "shard", s.key, "error", err)
 
-		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
-		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
-
 		// send the shard error to the caller for correctness
 		// since the context is cancelled, the result will be discarded.
 		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
@@ -72,9 +63,6 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		if err := reader.Close(); err != nil {
 			log.Errorf("failed to close mount reader: %s", err)
 		}
-
-		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
-		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 
 		// fail the shard
 		_ = d.failShard(s, d.completionCh, "failed to recover index for shard %s: %w", k, err)
@@ -94,9 +82,6 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	// the accessor.
 	w.notifyDead = func() {
 		log.Warnw("context cancelled while delivering accessor; releasing", "shard", s.key)
-
-		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
-		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 	}
 
 	d.dispatchResult(&ShardResult{Key: k, Accessor: sa, Error: err}, w)

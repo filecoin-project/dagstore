@@ -75,7 +75,7 @@ func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 }
 
 // Close terminates this shard accessor, releasing any resources associated
-// with it, and decrementing internal refcounts.
+// with it
 func (sa *ShardAccessor) Close() error {
 	if err := sa.data.Close(); err != nil {
 		log.Warnf("failed to close mount when closing shard accessor: %s", err)
@@ -88,6 +88,5 @@ func (sa *ShardAccessor) Close() error {
 	}
 	sa.lk.Unlock()
 
-	tsk := &task{op: OpShardRelease, shard: sa.shard}
-	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
+	return nil
 }
