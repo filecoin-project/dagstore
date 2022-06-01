@@ -20,8 +20,7 @@ type Interface interface {
 	RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error
 	GetShardInfo(k shard.Key) (ShardInfo, error)
 	GetIterableIndex(key shard.Key) (carindex.IterableIndex, error)
-	AllShardsInfo() AllShardsInfo
+	AllShardsInfo() (AllShardsInfo, error)
 	ShardsContainingMultihash(ctx context.Context, h mh.Multihash) ([]shard.Key, error)
-	GC(ctx context.Context) (*GCResult, error)
 	Close() error
 }
