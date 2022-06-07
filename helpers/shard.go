@@ -8,6 +8,9 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
+// AcquireShardSync blocks until the requested shard is acquired or the given context expires.
+// It returns the acquired shard if the acquire was successful. It is the caller's responsibility
+// to close the returned accessor when done.
 func AcquireShardSync(ctx context.Context, dagst *dagstore.DAGStore, sk shard.Key) (*dagstore.ShardAccessor, error) {
 	ch := make(chan dagstore.ShardResult, 1)
 
