@@ -30,6 +30,11 @@ func KeyFromCID(cid cid.Cid) Key {
 	return Key{str: cid.String()}
 }
 
+// KeyFromCIDMultihash returns a key based on the multihash of the given cid.
+func KeyFromCIDMultihash(cid cid.Cid) Key {
+	return KeyFromString(cid.Hash().String())
+}
+
 // String returns the string representation for this key.
 func (k Key) String() string {
 	return k.str
