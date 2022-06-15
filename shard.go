@@ -3,6 +3,7 @@ package dagstore
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
@@ -54,4 +55,6 @@ type Shard struct {
 	wDestroy  *waiter   // waiter for shard destruction.
 
 	refs uint32 // number of DAG accessors currently open
+
+	lastAccessedAt time.Time
 }

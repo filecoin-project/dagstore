@@ -3,6 +3,7 @@ package dagstore
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 type OpType int
@@ -41,6 +42,15 @@ func (d *DAGStore) control() {
 	var wFailure = &waiter{ctx: d.ctx, outCh: d.failureCh}
 
 	for {
+		// do we need to do a GC ?
+		ts, err := d.transientDirSize()
+		if err != nil {
+			continue
+		}
+		if float64(ts) >= float64(d.config.MaxTransientSize)*d.config.TransientsGCWatermarkHigh {
+			d.lruGC(float64(d.config.MaxTransientSize) * d.config.TransientsGCWatermarkHigh)
+		}
+
 		// consume the next task or GC request; if we're shutting down, this method will error.
 		tsk, gc, err := d.consumeNext()
 		if err != nil {
@@ -52,11 +62,12 @@ func (d *DAGStore) control() {
 			return
 		}
 
-		if gc != nil {
+		// Disable manaual GC if client wants automated LRU GC.
+		/*if gc != nil {
 			// this was a GC request.
 			d.gc(gc)
 			continue
-		}
+		}*/
 
 		s := tsk.shard
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
@@ -133,6 +144,7 @@ func (d *DAGStore) control() {
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
+			s.lastAccessedAt = time.Now()
 			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 

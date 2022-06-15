@@ -183,6 +183,12 @@ type Config struct {
 	// RecoverOnStart specifies whether failed shards should be recovered
 	// on start.
 	RecoverOnStart RecoverOnStartPolicy
+
+	MaxTransientSize int64
+
+	TransientsGCWatermarkHigh float64
+
+	TransientsGCWatermarkLow float64
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
