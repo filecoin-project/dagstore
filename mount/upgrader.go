@@ -3,12 +3,13 @@ package mount
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	"github.com/filecoin-project/dagstore/transients"
 
 	"github.com/filecoin-project/dagstore/throttle"
 	logging "github.com/ipfs/go-log/v2"
@@ -28,6 +29,8 @@ type Upgrader struct {
 	throttler   throttle.Throttler
 	key         string
 	passthrough bool
+
+	tm *transients.TransientsManager
 
 	// paths: pathComplete is the path of transients that are
 	// completely downloaded; pathPartial is the path where in-progress
@@ -118,26 +121,14 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 	u.lk.Unlock()
 
 	once.Do(func() {
-		// Create a new file in the partial location.
-		// os.Create truncates existing files.
-		var partial *os.File
-		partial, u.onceErr = os.Create(u.pathPartial)
-		if u.onceErr != nil {
-			return
-		}
-		defer partial.Close()
-
 		// do the refetch; abort and remove/reset the partial if it fails.
 		// perform outside the lock as this is a long-running operation.
 		// u.onceErr is only written by the goroutine that gets to run sync.Once
 		// and it's only read after it finishes.
 
-		u.onceErr = u.refetch(ctx, partial)
+		u.onceErr = u.refetch(ctx, u.pathPartial)
 		if u.onceErr != nil {
 			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
-			if err := os.Remove(u.pathPartial); err != nil {
-				log.Warnw("failed to remove partial transient", "shard", u.key, "path", u.pathPartial, "error", err)
-			}
 			return
 		}
 
@@ -223,8 +214,8 @@ func (u *Upgrader) Close() error {
 	return nil
 }
 
-func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
-	log.Debugw("actually refetching", "shard", u.key, "path", into.Name())
+func (u *Upgrader) refetch(ctx context.Context, path string) error {
+	log.Debugw("actually refetching", "shard", u.key)
 
 	// sanity check on underlying mount.
 	stat, err := u.underlying.Stat(ctx)
@@ -245,17 +236,8 @@ func (u *Upgrader) refetch(ctx context.Context, into *os.File) error {
 	}
 
 	err = t.Do(ctx, func(ctx context.Context) error {
-		// fetch from underlying and copy.
-		from, err := u.underlying.Fetch(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to fetch from underlying mount: %w", err)
-		}
-		defer from.Close()
-
-		_, err = io.Copy(into, from)
-		return err
+		return u.tm.Download(ctx, u.underlying, path)
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
 	}
@@ -286,7 +268,7 @@ func (u *Upgrader) DeleteTransient() error {
 	// remove the transient and clear it always, even if os.Remove
 	// returns an error. This allows us to recover from errors like the user
 	// deleting the transient we're currently tracking.
-	err := os.Remove(u.path)
+	err := u.tm.DeleteTransient(u.path)
 	u.path = ""
 	u.ready = false
 	log.Debugw("deleted existing transient", "shard", u.key, "path", u.path, "error", err)
