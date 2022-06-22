@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"sync"
+
+	"github.com/filecoin-project/dagstore/gc"
 
 	mh "github.com/multiformats/go-multihash"
 
@@ -60,9 +64,13 @@ var (
 	// ErrShardInitializationFailed is returned when shard initialization fails.
 	ErrShardInitializationFailed = errors.New("shard initialization failed")
 
+	ErrShardIllegalReservationRequest = errors.New("shard reservation request failed")
+
 	// ErrShardInUse is returned when the user attempts to destroy a shard that
 	// is in use.
 	ErrShardInUse = errors.New("shard in use")
+
+	ErrNotEnoughSpace = errors.New("not enough space")
 )
 
 // DAGStore is the central object of the DAG store.
@@ -114,6 +122,10 @@ type DAGStore struct {
 	ctx      context.Context
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
+
+	// GC state.
+	totalTransientDirSize int64 // guarded by the event loop
+	garbageCollector      gc.GarbageCollector
 }
 
 var _ Interface = (*DAGStore)(nil)
@@ -123,8 +135,25 @@ type dispatch struct {
 	res *ShardResult
 }
 
+type reservationReq struct {
+	count    int64
+	want     int64
+	response chan *reservationResp
+}
+
+type reservationResp struct {
+	reserved int64
+	err      error
+}
+
+type releaseReq struct {
+	release int64
+}
+
 // Task represents an operation to be performed on a shard or the DAG store.
 type task struct {
+	reservationReq *reservationReq
+	releaseReq     *releaseReq
 	*waiter
 	op    OpType
 	shard *Shard
@@ -183,6 +212,9 @@ type Config struct {
 	// RecoverOnStart specifies whether failed shards should be recovered
 	// on start.
 	RecoverOnStart RecoverOnStartPolicy
+
+	// MaxTransientDirSize specifies the maximum allowable size of the transients directory.
+	MaxTransientDirSize int64
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -201,6 +233,11 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	if cfg.IndexRepo == nil {
 		log.Info("using in-memory index store")
 		cfg.IndexRepo = index.NewMemoryRepo()
+	}
+
+	if cfg.MaxTransientDirSize == 0 {
+		log.Warnw("no maximum size specified for the transient directory, using the maximum possible int value")
+		cfg.MaxTransientDirSize = math.MaxInt64
 	}
 
 	if cfg.TopLevelIndex == nil {
@@ -248,6 +285,12 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if max := cfg.MaxConcurrentReadyFetches; max > 0 {
 		dagst.throttleReaadyFetch = throttle.Fixed(max)
+	}
+
+	var err error
+	dagst.totalTransientDirSize, err = dagst.transientDirSize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate transient dir size: %w", err)
 	}
 
 	return dagst, nil
@@ -380,7 +423,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient)
+	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, &TransientSpaceManager{d})
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -475,9 +518,10 @@ func (d *DAGStore) RecoverShard(ctx context.Context, key shard.Key, out chan Sha
 }
 
 type Trace struct {
-	Key   shard.Key
-	Op    OpType
-	After ShardInfo
+	Key              shard.Key
+	Op               OpType
+	After            ShardInfo
+	TransientDirSize int64
 }
 
 type ShardInfo struct {
@@ -600,4 +644,18 @@ func ensureDir(path string) error {
 func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
 	err := fmt.Errorf(format, args...)
 	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
+}
+
+func (d *DAGStore) transientDirSize() (int64, error) {
+	var size int64
+	err := filepath.Walk(d.config.TransientsDir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return err
+	})
+	return size, err
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/filecoin-project/dagstore/shard"
+
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/filecoin-project/dagstore/throttle"
@@ -106,7 +108,7 @@ func TestMmap(t *testing.T) {
 		tempdir := t.TempDir()
 
 		var err error
-		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "")
+		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "", &simplMockTransientManager{})
 		require.NoError(t, err)
 
 		// warm up the upgrader so a transient is created, and we can obtain
@@ -193,4 +195,18 @@ func createAccessor(t *testing.T, mnt mount.Mount) *ShardAccessor {
 	accessor, err := NewShardAccessor(reader2, idx, dummyShard)
 	require.NoError(t, err)
 	return accessor
+}
+
+type simplMockTransientManager struct{}
+
+func (s *simplMockTransientManager) Reserve(ctx context.Context, k shard.Key, count int64, n int64) (reserved int64, err error) {
+	if n != 0 {
+		return n, nil
+	} else {
+		return 10000, nil
+	}
+}
+
+func (s *simplMockTransientManager) Release(ctx context.Context, k shard.Key, n int64) error {
+	return nil
 }

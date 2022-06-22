@@ -3,19 +3,28 @@ package mount
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
-	"github.com/filecoin-project/dagstore/transients"
+	"github.com/filecoin-project/dagstore/shard"
 
 	"github.com/filecoin-project/dagstore/throttle"
 	logging "github.com/ipfs/go-log/v2"
 )
 
-var log = logging.Logger("dagstore/upgrader")
+var (
+	readBufferSize = 32 * 1024
+	log            = logging.Logger("dagstore/upgrader")
+)
+
+type TransientSpaceManager interface {
+	Reserve(ctx context.Context, k shard.Key, count int64, toReserve int64) (reserved int64, err error)
+	Release(ctx context.Context, k shard.Key, n int64) error
+}
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
 // Reader capabilities, whether the original mount is of remote or local kind.
@@ -30,8 +39,6 @@ type Upgrader struct {
 	key         string
 	passthrough bool
 
-	tm *transients.TransientsManager
-
 	// paths: pathComplete is the path of transients that are
 	// completely downloaded; pathPartial is the path where in-progress
 	// downloads are placed. Once fully downloaded, the file is renamed to
@@ -39,9 +46,11 @@ type Upgrader struct {
 	pathComplete string
 	pathPartial  string
 
-	lk    sync.Mutex
-	path  string // guarded by lk
-	ready bool   // guarded by lk
+	lk            sync.Mutex
+	path          string // guarded by lk
+	ready         bool   // guarded by lk
+	transientSize int64  // guarded by lk
+
 	// once guards deduplicates concurrent refetch requests; the caller that
 	// gets to run stores the result in onceErr, for other concurrent callers to
 	// consume it.
@@ -49,6 +58,8 @@ type Upgrader struct {
 	onceErr error      // NOT guarded by lk; access coordinated by sync.Once
 
 	fetches int32 // guarded by atomic
+
+	tsm TransientSpaceManager
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -56,7 +67,7 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string) (*Upgrader, error) {
+func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, tsm TransientSpaceManager) (*Upgrader, error) {
 	ret := &Upgrader{
 		underlying:   underlying,
 		key:          key,
@@ -65,6 +76,7 @@ func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string
 		throttler:    throttler,
 		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
 		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
+		tsm:          tsm,
 	}
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
@@ -79,10 +91,11 @@ func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string
 	}
 
 	if initial != "" {
-		if _, err := os.Stat(initial); err == nil {
+		if fi, err := os.Stat(initial); err == nil {
 			log.Debugw("initialized with existing transient that's alive", "shard", key, "path", initial)
 			ret.path = initial
 			ret.ready = true
+			ret.transientSize = fi.Size()
 			return ret, nil
 		}
 	}
@@ -132,6 +145,13 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 			return
 		}
 
+		var fi os.FileInfo
+		fi, u.onceErr = os.Stat(u.pathPartial)
+		if u.onceErr != nil {
+			log.Warnw("failed to stat refetched file", "shard", u.key, "error", u.onceErr)
+			return
+		}
+
 		// rename the partial file to a non-partial file.
 		// set the new transient path under a lock, and recycle the sync.Once.
 		// if the target file exists, os.Rename replaces it.
@@ -141,6 +161,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 
 		u.lk.Lock()
 		u.path = u.pathComplete
+		u.transientSize = fi.Size()
 		u.ready = true
 		u.once = new(sync.Once)
 		u.lk.Unlock()
@@ -236,7 +257,7 @@ func (u *Upgrader) refetch(ctx context.Context, path string) error {
 	}
 
 	err = t.Do(ctx, func(ctx context.Context) error {
-		return u.tm.Download(ctx, u.underlying, path)
+		return u.download(ctx, path)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
@@ -249,28 +270,157 @@ func (u *Upgrader) refetch(ctx context.Context, path string) error {
 // one exists. It is the caller's responsibility to ensure the transient is
 // not in use. If the tracked transient is gone, this will reset the internal
 // state to "" (no transient) to enable recovery.
-func (u *Upgrader) DeleteTransient() error {
+// This method should ONLY be called from the dagstore event loop.
+func (u *Upgrader) DeleteTransient() (release int64, err error) {
 	u.lk.Lock()
 	defer u.lk.Unlock()
 
 	if u.path == "" {
 		log.Debugw("transient is empty; nothing to remove", "shard", u.key)
-		return nil // nothing to do.
+		return 0, nil // nothing to do.
 	}
 
 	// refuse to delete the transient if it's not being managed by us (i.e. in
 	// our transients root directory).
 	if _, err := filepath.Rel(u.rootdir, u.path); err != nil {
 		log.Debugw("transient is not owned by us; nothing to remove", "shard", u.key)
-		return nil
+		return 0, nil
 	}
 
 	// remove the transient and clear it always, even if os.Remove
 	// returns an error. This allows us to recover from errors like the user
 	// deleting the transient we're currently tracking.
-	err := u.tm.DeleteTransient(u.path)
+	err = os.Remove(u.path)
 	u.path = ""
 	u.ready = false
+	size := u.transientSize
+	u.transientSize = 0
 	log.Debugw("deleted existing transient", "shard", u.key, "path", u.path, "error", err)
-	return err
+	return size, err
+}
+
+func (u *Upgrader) download(ctx context.Context, dstPath string) error {
+	st, err := u.underlying.Stat(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to stat underlying: %w", err)
+	}
+
+	// create the destination file we need to download the mount contents to.
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer dst.Close()
+
+	from, err := u.underlying.Fetch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch underlying mount: %w", err)
+	}
+
+	totalReserved, downloadErr := func() (int64, error) {
+		reserveCount := int64(0)
+		totalReserved := int64(0)
+		for {
+			if ctx.Err() != nil {
+				return totalReserved, ctx.Err()
+			}
+			reserved, err := u.tsm.Reserve(ctx, shard.KeyFromString(u.key), reserveCount, st.Size)
+			if err != nil {
+				return totalReserved, fmt.Errorf("failed to make a reservation: %w", err)
+			}
+			reserveCount++
+			totalReserved = totalReserved + reserved
+
+			hasMore, err := downloadNBytes(ctx, from, reserved, dst)
+			if err != nil {
+				return totalReserved, fmt.Errorf("failed to download: %w", err)
+			}
+
+			fi, err := dst.Stat()
+			if err != nil {
+				return totalReserved, fmt.Errorf("failed to stat output file: %w", err)
+			}
+
+			// if we've already read as many bytes as the the size indicated by the underlying mount,
+			// short-circuit and return here instead if doing one more round to see an EOF.
+			if st.Size != 0 && fi.Size() == st.Size {
+				return totalReserved, nil
+			}
+
+			if !hasMore {
+				return totalReserved, nil
+			}
+		}
+	}()
+
+	releaseOnError := func(rerr error) error {
+		// if we fail to remove the file, something has gone wrong and we shouldn't release the bytes to be on the safe side.
+		if err := os.Remove(dstPath); err != nil {
+			log.Errorw("failed to remove transient for failed download, will not release reservation", "path", dstPath, "error", err)
+			return rerr
+		}
+		if err := u.tsm.Release(ctx, shard.KeyFromString(u.key), totalReserved); err != nil {
+			log.Errorw("failed to release reservation", "error", err)
+		}
+		return rerr
+	}
+
+	// if there was an error downloading, remove the downloaded file and release all the bytes we'd reserved.
+	if downloadErr != nil {
+		return releaseOnError(downloadErr)
+	}
+
+	// if the download finished successfully and we've reserved more bytes than we've downloaded,
+	// release (totalReserved - file size) bytes as we've not used those bytes.
+	fi, statErr := dst.Stat()
+	if statErr != nil {
+		return releaseOnError(statErr)
+	}
+	if totalReserved > fi.Size() {
+		return u.tsm.Release(ctx, shard.KeyFromString(u.key), totalReserved-fi.Size())
+	}
+
+	return nil
+}
+
+// downloadNBytes copies and writes at most `n` bytes from the given reader to the given output file.
+// It returns true if there are still more bytes to be read from the reader and false otherwise.
+// It will return true if and only if err == nil.
+// If it returns false and err == nil it means that we've successfully exhausted the reader.
+func downloadNBytes(ctx context.Context, rd Reader, n int64, out *os.File) (hasMore bool, err error) {
+	remaining := n
+	buf := make([]byte, readBufferSize)
+	for {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+
+		if remaining <= 0 {
+			return true, nil
+		}
+
+		if len(buf) > int(remaining) {
+			buf = buf[0:remaining]
+		}
+
+		read, rerr := rd.Read(buf)
+		remaining = remaining - int64(read)
+		if read > 0 {
+			written, werr := out.Write(buf[0:read])
+			if werr != nil {
+				return false, fmt.Errorf("failed to write: %w", werr)
+			}
+
+			if written < 0 || read != written {
+				return false, fmt.Errorf("read-write mismatch writing to the output file, read=%d, written=%d", read, written)
+			}
+		}
+
+		if rerr == io.EOF {
+			return false, nil
+		}
+		if rerr != nil {
+			return false, fmt.Errorf("error while reading from the underlying mount: %w", err)
+		}
+	}
 }

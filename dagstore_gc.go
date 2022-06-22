@@ -27,6 +27,10 @@ func (e *GCResult) ShardFailures() int {
 	return failures
 }
 
+func (d *DAGStore) gcUptoTarget(target int64) {
+
+}
+
 // gc performs DAGStore GC. Refer to DAGStore#GC for more information.
 //
 // The event loops gives it exclusive execution rights, so while GC is running,
@@ -52,10 +56,11 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 	for _, s := range reclaim {
 		// only read lock: we're not modifying state, and the mount has its own lock.
 		s.lk.RLock()
-		err := s.mount.DeleteTransient()
+		freed, err := s.mount.DeleteTransient()
 		if err != nil {
 			log.Warnw("failed to delete transient", "shard", s.key, "error", err)
 		}
+		d.totalTransientDirSize = d.totalTransientDirSize - freed
 
 		// record the error so we can return it.
 		res.Shards[s.key] = err

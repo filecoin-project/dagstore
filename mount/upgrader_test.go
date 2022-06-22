@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/dagstore/shard"
+
 	"github.com/filecoin-project/dagstore/testdata"
 	"github.com/filecoin-project/dagstore/throttle"
 	"github.com/stretchr/testify/require"
@@ -89,8 +91,9 @@ func TestUpgrade(t *testing.T) {
 				require.NoError(t, err)
 				require.EqualValues(t, fstat.Size(), ustat.Size)
 
-				err = u.DeleteTransient()
+				size, err := u.DeleteTransient()
 				require.NoError(t, err)
+				require.NotEqualValues(t, size, 0)
 
 				_, err = os.Stat(u.TransientPath())
 				require.Error(t, err)
@@ -114,7 +117,7 @@ func TestUpgrade(t *testing.T) {
 
 			mnt := tcc.createMnt(t, key, rootDir)
 
-			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial)
+			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial, &simplMockTransientManager{})
 			require.NoError(t, err)
 			require.NotNil(t, u)
 
@@ -146,7 +149,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	key := fmt.Sprintf("%d", rand.Uint64())
 	rootDir := t.TempDir()
-	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "")
+	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", &simplMockTransientManager{})
 	require.NoError(t, err)
 	require.Zero(t, mnt.Count())
 
@@ -248,7 +251,7 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 			underlyings := make([]*blockingReaderMount, 100)
 			for i := range upgraders {
 				underlyings[i] = &blockingReaderMount{isReady: tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
-				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "")
+				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "", &simplMockTransientManager{})
 				require.NoError(t, err)
 				upgraders[i] = u
 			}
@@ -360,4 +363,18 @@ func (b *blockingReaderMount) Serialize() *url.URL {
 
 func (b *blockingReaderMount) Deserialize(url *url.URL) error {
 	panic("implement me")
+}
+
+type simplMockTransientManager struct{}
+
+func (s *simplMockTransientManager) Reserve(ctx context.Context, k shard.Key, count int64, n int64) (reserved int64, err error) {
+	if n != 0 {
+		return n, nil
+	} else {
+		return 10000, nil
+	}
+}
+
+func (s *simplMockTransientManager) Release(ctx context.Context, k shard.Key, n int64) error {
+	return nil
 }
