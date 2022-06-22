@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -69,8 +68,6 @@ var (
 	// ErrShardInUse is returned when the user attempts to destroy a shard that
 	// is in use.
 	ErrShardInUse = errors.New("shard in use")
-
-	ErrNotEnoughSpace = errors.New("not enough space")
 )
 
 // DAGStore is the central object of the DAG store.
@@ -123,9 +120,16 @@ type DAGStore struct {
 	cancelFn context.CancelFunc
 	wg       sync.WaitGroup
 
-	// GC state.
-	totalTransientDirSize int64 // guarded by the event loop
-	garbageCollector      gc.GarbageCollector
+	// Automated GC state
+	// guarded by the event loop
+	totalTransientDirSize int64
+
+	// immutable, can be read anywhere without a lock.
+	automatedGcEnabled        bool
+	maxTransientDirSize       int64
+	transientsGCWatermarkHigh float64
+	transientsGCWatermarkLow  float64
+	garbageCollector          gc.GarbageCollector
 }
 
 var _ Interface = (*DAGStore)(nil)
@@ -136,9 +140,9 @@ type dispatch struct {
 }
 
 type reservationReq struct {
-	count    int64
-	want     int64
-	response chan *reservationResp
+	nPrevReservations int64
+	want              int64
+	response          chan *reservationResp
 }
 
 type reservationResp struct {
@@ -165,6 +169,19 @@ type ShardResult struct {
 	Key      shard.Key
 	Error    error
 	Accessor *ShardAccessor
+}
+
+type AutomatedGCConfig struct {
+	// MaxTransientDirSize specifies the maximum allowable size of the transients directory.
+	MaxTransientDirSize int64
+
+	// TransientsGCWatermarkHigh is the proportion of the `MaxTransientDirSize` at which we we proactively starts GCing
+	// the transients directory till the ratio of (transient directory size / `MaxTransientDirSize`) is equal to or less
+	// than the `TransientsGCWatermarkLow` config param below.
+	TransientsGCWatermarkHigh float64
+
+	// TransientsGCWatermarkLow: See documentation of `TransientsGCWatermarkHigh` above.
+	TransientsGCWatermarkLow float64
 }
 
 type Config struct {
@@ -213,8 +230,11 @@ type Config struct {
 	// on start.
 	RecoverOnStart RecoverOnStartPolicy
 
-	// MaxTransientDirSize specifies the maximum allowable size of the transients directory.
-	MaxTransientDirSize int64
+	// AutomatedGCEnabled enables Automated GC according to the given GC policy.
+	AutomatedGCEnabled bool
+
+	// AutomatedGCConfig specifies the confguration parameters to use for the Automated GC.
+	AutomatedGCConfig *AutomatedGCConfig
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -235,9 +255,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		cfg.IndexRepo = index.NewMemoryRepo()
 	}
 
-	if cfg.MaxTransientDirSize == 0 {
-		log.Warnw("no maximum size specified for the transient directory, using the maximum possible int value")
-		cfg.MaxTransientDirSize = math.MaxInt64
+	if cfg.AutomatedGCEnabled {
+		if cfg.AutomatedGCConfig == nil {
+			return nil, errors.New("automated GC config cannot be empty since automated GC has been enabled")
+		}
 	}
 
 	if cfg.TopLevelIndex == nil {
@@ -277,6 +298,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		throttleReaadyFetch: throttle.Noop(),
 		ctx:                 ctx,
 		cancelFn:            cancel,
+		automatedGcEnabled:  cfg.AutomatedGCEnabled,
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
@@ -285,6 +307,12 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 
 	if max := cfg.MaxConcurrentReadyFetches; max > 0 {
 		dagst.throttleReaadyFetch = throttle.Fixed(max)
+	}
+
+	if cfg.AutomatedGCEnabled {
+		dagst.maxTransientDirSize = cfg.AutomatedGCConfig.MaxTransientDirSize
+		dagst.transientsGCWatermarkHigh = cfg.AutomatedGCConfig.TransientsGCWatermarkHigh
+		dagst.transientsGCWatermarkLow = cfg.AutomatedGCConfig.TransientsGCWatermarkLow
 	}
 
 	var err error
@@ -423,7 +451,11 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, &TransientSpaceManager{d})
+	var downloader mount.TransientDownloader = &mount.SimpleDownloader{}
+	if d.automatedGcEnabled {
+		downloader = mount.NewReservationGatedDownloader(&TransientSpaceManager{d})
+	}
+	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, downloader)
 	if err != nil {
 		d.lk.Unlock()
 		return err

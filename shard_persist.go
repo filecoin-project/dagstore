@@ -73,7 +73,13 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to instantiate mount from URL: %w", err)
 	}
-	s.mount, err = mount.Upgrade(mnt, s.d.throttleReaadyFetch, s.d.config.TransientsDir, s.key.String(), ps.TransientPath, &TransientSpaceManager{s.d})
+
+	var downloader mount.TransientDownloader = &mount.SimpleDownloader{}
+	if s.d.automatedGcEnabled {
+		downloader = mount.NewReservationGatedDownloader(&TransientSpaceManager{s.d})
+	}
+
+	s.mount, err = mount.Upgrade(mnt, s.d.throttleReaadyFetch, s.d.config.TransientsDir, s.key.String(), ps.TransientPath, downloader)
 	if err != nil {
 		return fmt.Errorf("failed to apply mount upgrader: %w", err)
 	}

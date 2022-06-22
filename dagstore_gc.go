@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/filecoin-project/dagstore/shard"
 )
@@ -13,7 +14,8 @@ import (
 type GCResult struct {
 	// Shards includes an entry for every shard whose transient was reclaimed.
 	// Nil error values indicate success.
-	Shards map[shard.Key]error
+	Shards                  map[shard.Key]error
+	TransientDirSizeAfterGC int64
 }
 
 // ShardFailures returns the number of shards whose transient reclaim failed.
@@ -27,15 +29,60 @@ func (e *GCResult) ShardFailures() int {
 	return failures
 }
 
-func (d *DAGStore) gcUptoTarget(target int64) {
+// performs GC till the size of the transients directory goes below the given target.
+// can only be called from the event loop.
+func (d *DAGStore) gcUptoTarget(target float64) {
+	// TODO Lock contention with the shard lock in reservations gc.
+	// accomplish that by using a GC interface abstraction.
+	// determine which shards can be reclaimed.
+	d.lk.RLock()
+	var reclaim []*Shard
+	for _, s := range d.shards {
+		s.lk.RLock()
+		if nAcq := len(s.wAcquire); (s.state == ShardStateAvailable || s.state == ShardStateErrored) && nAcq == 0 {
+			reclaim = append(reclaim, s)
+		}
+		s.lk.RUnlock()
+	}
+	d.lk.RUnlock()
 
+	// Sort in LRU order
+	sort.Slice(reclaim, func(i, j int) bool {
+		reclaim[i].lk.RLock()
+		defer reclaim[i].lk.RUnlock()
+
+		reclaim[j].lk.RLock()
+		defer reclaim[j].lk.RUnlock()
+
+		return reclaim[i].lastAccessedAt.Before(reclaim[j].lastAccessedAt)
+	})
+
+	// attempt to delete transients of reclaimed shards.
+	for _, s := range reclaim {
+		if float64(d.totalTransientDirSize) <= target {
+			return
+		}
+		// only read lock: we're not modifying state, and the mount has its own lock.
+		s.lk.RLock()
+		freed, err := s.mount.DeleteTransient()
+		if err != nil {
+			log.Warnw("failed to delete transient", "shard", s.key, "error", err)
+		}
+		d.totalTransientDirSize -= freed
+
+		// flush the shard state to the datastore.
+		if err := s.persist(d.ctx, d.config.Datastore); err != nil {
+			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		}
+		s.lk.RUnlock()
+	}
 }
 
-// gc performs DAGStore GC. Refer to DAGStore#GC for more information.
+// manualGC performs DAGStore GC. Refer to DAGStore#GC for more information.
 //
 // The event loops gives it exclusive execution rights, so while GC is running,
 // no other events are being processed.
-func (d *DAGStore) gc(resCh chan *GCResult) {
+func (d *DAGStore) manualGC(resCh chan *GCResult) {
 	res := &GCResult{
 		Shards: make(map[shard.Key]error),
 	}
@@ -60,7 +107,7 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 		if err != nil {
 			log.Warnw("failed to delete transient", "shard", s.key, "error", err)
 		}
-		d.totalTransientDirSize = d.totalTransientDirSize - freed
+		d.totalTransientDirSize -= freed
 
 		// record the error so we can return it.
 		res.Shards[s.key] = err
@@ -72,6 +119,7 @@ func (d *DAGStore) gc(resCh chan *GCResult) {
 		s.lk.RUnlock()
 	}
 
+	res.TransientDirSizeAfterGC = d.totalTransientDirSize
 	select {
 	case resCh <- res:
 	case <-d.ctx.Done():

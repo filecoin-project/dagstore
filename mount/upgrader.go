@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/jpillora/backoff"
 
 	"github.com/filecoin-project/dagstore/shard"
 
@@ -19,11 +22,22 @@ import (
 var (
 	readBufferSize = 32 * 1024
 	log            = logging.Logger("dagstore/upgrader")
+
+	// 5s, 7s, 11s, 16s, 25s, 38s, 1m
+	minBackOff             = 5 * time.Second
+	maxBackOff             = 1 * time.Minute
+	factor                 = 1.5
+	maxReservationAttempts = 7
 )
 
 type TransientSpaceManager interface {
 	Reserve(ctx context.Context, k shard.Key, count int64, toReserve int64) (reserved int64, err error)
 	Release(ctx context.Context, k shard.Key, n int64) error
+}
+
+type TransientDownloader interface {
+	SetUpgrader(u *Upgrader)
+	Download(ctx context.Context, outPath string) error
 }
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
@@ -59,7 +73,7 @@ type Upgrader struct {
 
 	fetches int32 // guarded by atomic
 
-	tsm TransientSpaceManager
+	downloader TransientDownloader
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -67,7 +81,7 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, tsm TransientSpaceManager) (*Upgrader, error) {
+func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, downloader TransientDownloader) (*Upgrader, error) {
 	ret := &Upgrader{
 		underlying:   underlying,
 		key:          key,
@@ -76,8 +90,10 @@ func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string
 		throttler:    throttler,
 		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
 		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
-		tsm:          tsm,
+		downloader:   downloader,
 	}
+	downloader.SetUpgrader(ret)
+
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
@@ -235,7 +251,7 @@ func (u *Upgrader) Close() error {
 	return nil
 }
 
-func (u *Upgrader) refetch(ctx context.Context, path string) error {
+func (u *Upgrader) refetch(ctx context.Context, outPath string) error {
 	log.Debugw("actually refetching", "shard", u.key)
 
 	// sanity check on underlying mount.
@@ -257,7 +273,7 @@ func (u *Upgrader) refetch(ctx context.Context, path string) error {
 	}
 
 	err = t.Do(ctx, func(ctx context.Context) error {
-		return u.download(ctx, path)
+		return u.downloader.Download(ctx, outPath)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
@@ -299,11 +315,79 @@ func (u *Upgrader) DeleteTransient() (release int64, err error) {
 	return size, err
 }
 
-func (u *Upgrader) download(ctx context.Context, dstPath string) error {
-	st, err := u.underlying.Stat(ctx)
+type SimpleDownloader struct {
+	u *Upgrader
+}
+
+func (s *SimpleDownloader) SetUpgrader(u *Upgrader) {
+	s.u = u
+}
+
+func (s *SimpleDownloader) Download(ctx context.Context, dstPath string) error {
+	// fetch from underlying and copy.
+	from, err := s.u.underlying.Fetch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch from underlying mount: %w", err)
+	}
+	defer from.Close()
+
+	into, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("failed to create out file: %w", err)
+	}
+	defer into.Close()
+
+	_, err = io.Copy(into, from)
+	return err
+}
+
+type ReservationGatedDownloaderOpt func(r *ReservationGatedDownloader)
+
+// ReservationBackOffRetryOpt configures the backoff retry parameters for the transient space reservation attempts.
+func ReservationBackOffRetryOpt(minBackoff, maxBackoff time.Duration, factor, maxReservationAttempts float64) ReservationGatedDownloaderOpt {
+	return func(r *ReservationGatedDownloader) {
+		r.minBackOffWait = minBackoff
+		r.maxBackoffWait = maxBackoff
+		r.backOffFactor = factor
+		r.maxReservationAttempts = maxReservationAttempts
+	}
+}
+
+type ReservationGatedDownloader struct {
+	u                      *Upgrader
+	tsm                    TransientSpaceManager
+	minBackOffWait         time.Duration
+	maxBackoffWait         time.Duration
+	backOffFactor          float64
+	maxReservationAttempts float64
+}
+
+func NewReservationGatedDownloader(tsm TransientSpaceManager, opts ...ReservationGatedDownloaderOpt) *ReservationGatedDownloader {
+	r := &ReservationGatedDownloader{
+		tsm:                    tsm,
+		minBackOffWait:         minBackOff,
+		maxBackoffWait:         maxBackOff,
+		backOffFactor:          factor,
+		maxReservationAttempts: float64(maxReservationAttempts),
+	}
+
+	for _, o := range opts {
+		o(r)
+	}
+
+	return r
+}
+
+func (r *ReservationGatedDownloader) SetUpgrader(u *Upgrader) {
+	r.u = u
+}
+
+func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath string) error {
+	st, err := r.u.underlying.Stat(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to stat underlying: %w", err)
 	}
+	transientSizeKnown := st.Size != 0
 
 	// create the destination file we need to download the mount contents to.
 	dst, err := os.Create(dstPath)
@@ -312,43 +396,71 @@ func (u *Upgrader) download(ctx context.Context, dstPath string) error {
 	}
 	defer dst.Close()
 
-	from, err := u.underlying.Fetch(ctx)
+	from, err := r.u.underlying.Fetch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch underlying mount: %w", err)
 	}
+	sk := shard.KeyFromString(r.u.key)
 
-	totalReserved, downloadErr := func() (int64, error) {
-		reserveCount := int64(0)
-		totalReserved := int64(0)
+	reserveWithBackoff := func(nSuccessReserve int64) (reserved int64, err error) {
+		// back-off retry before failing
+		backoff := &backoff.Backoff{
+			Min:    r.minBackOffWait,
+			Max:    r.maxBackoffWait,
+			Factor: r.backOffFactor,
+			Jitter: true,
+		}
+		for {
+			reserved, err := r.tsm.Reserve(ctx, sk, nSuccessReserve, st.Size)
+			if err == nil || err != ErrNotEnoughSpaceInTransientsDir {
+				return reserved, err
+			}
+			nAttempts := backoff.Attempt() + 1
+			if nAttempts >= r.maxReservationAttempts {
+				return reserved, err
+			}
+
+			dur := backoff.Duration()
+			t := time.NewTimer(dur)
+			defer t.Stop()
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				return reserved, ctx.Err()
+			}
+		}
+	}
+
+	totalReserved := int64(0)
+	downloadErr := func() error {
+		nSuccessReserve := int64(0)
 		for {
 			if ctx.Err() != nil {
-				return totalReserved, ctx.Err()
+				return ctx.Err()
 			}
-			reserved, err := u.tsm.Reserve(ctx, shard.KeyFromString(u.key), reserveCount, st.Size)
+			reserved, err := reserveWithBackoff(nSuccessReserve)
 			if err != nil {
-				return totalReserved, fmt.Errorf("failed to make a reservation: %w", err)
+				return fmt.Errorf("failed to make a reservation: %w", err)
 			}
-			reserveCount++
+			nSuccessReserve++
 			totalReserved = totalReserved + reserved
 
 			hasMore, err := downloadNBytes(ctx, from, reserved, dst)
 			if err != nil {
-				return totalReserved, fmt.Errorf("failed to download: %w", err)
-			}
-
-			fi, err := dst.Stat()
-			if err != nil {
-				return totalReserved, fmt.Errorf("failed to stat output file: %w", err)
+				return fmt.Errorf("failed to download: %w", err)
 			}
 
 			// if we've already read as many bytes as the the size indicated by the underlying mount,
 			// short-circuit and return here instead if doing one more round to see an EOF.
-			if st.Size != 0 && fi.Size() == st.Size {
-				return totalReserved, nil
+			fi, err := dst.Stat()
+			if err != nil {
+				return fmt.Errorf("failed to stat output file: %w", err)
 			}
-
+			if transientSizeKnown && fi.Size() == st.Size {
+				return nil
+			}
 			if !hasMore {
-				return totalReserved, nil
+				return nil
 			}
 		}
 	}()
@@ -359,7 +471,7 @@ func (u *Upgrader) download(ctx context.Context, dstPath string) error {
 			log.Errorw("failed to remove transient for failed download, will not release reservation", "path", dstPath, "error", err)
 			return rerr
 		}
-		if err := u.tsm.Release(ctx, shard.KeyFromString(u.key), totalReserved); err != nil {
+		if err := r.tsm.Release(ctx, sk, totalReserved); err != nil {
 			log.Errorw("failed to release reservation", "error", err)
 		}
 		return rerr
@@ -377,7 +489,7 @@ func (u *Upgrader) download(ctx context.Context, dstPath string) error {
 		return releaseOnError(statErr)
 	}
 	if totalReserved > fi.Size() {
-		return u.tsm.Release(ctx, shard.KeyFromString(u.key), totalReserved-fi.Size())
+		return r.tsm.Release(ctx, sk, totalReserved-fi.Size())
 	}
 
 	return nil
