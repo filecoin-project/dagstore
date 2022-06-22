@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/filecoin-project/dagstore/gc"
-
 	mh "github.com/multiformats/go-multihash"
 
 	carindex "github.com/ipld/go-car/v2/index"
@@ -129,7 +127,6 @@ type DAGStore struct {
 	maxTransientDirSize       int64
 	transientsGCWatermarkHigh float64
 	transientsGCWatermarkLow  float64
-	garbageCollector          gc.GarbageCollector
 }
 
 var _ Interface = (*DAGStore)(nil)

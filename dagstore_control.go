@@ -288,7 +288,6 @@ func (d *DAGStore) control() {
 
 			// set the state to recovering.
 			s.state = ShardStateRecovering
-
 			// park the waiter; there can never be more than one because
 			// subsequent calls to recover the same shard will be rejected
 			// because the state is no longer ShardStateErrored.

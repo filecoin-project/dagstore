@@ -32,9 +32,6 @@ func (e *GCResult) ShardFailures() int {
 // performs GC till the size of the transients directory goes below the given target.
 // can only be called from the event loop.
 func (d *DAGStore) gcUptoTarget(target float64) {
-	// TODO Lock contention with the shard lock in reservations gc.
-	// accomplish that by using a GC interface abstraction.
-	// determine which shards can be reclaimed.
 	d.lk.RLock()
 	var reclaim []*Shard
 	for _, s := range d.shards {
