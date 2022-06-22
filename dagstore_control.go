@@ -353,8 +353,10 @@ func (d *DAGStore) control() {
 				break
 			}
 
+			s.lk.Unlock()
 			// otherwise, perform a GC to make space for the reservation.
 			d.gcUptoTarget(float64(d.maxTransientDirSize - toReserve))
+			s.lk.Lock()
 
 			// if we have enough space available after the gc, allocate the reservation
 			if d.totalTransientDirSize+toReserve <= d.maxTransientDirSize {
