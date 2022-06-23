@@ -20,6 +20,7 @@ type PersistedShard struct {
 	State         ShardState `json:"s"`
 	Lazy          bool       `json:"l"`
 	Error         string     `json:"e"`
+	TransientSize int64      `json:"sz"`
 }
 
 // MarshalJSON returns a serialized representation of the state. It must be
@@ -36,6 +37,7 @@ func (s *Shard) MarshalJSON() ([]byte, error) {
 		State:         s.state,
 		Lazy:          s.lazy,
 		TransientPath: s.mount.TransientPath(),
+		TransientSize: s.transientSize,
 	}
 	if s.err != nil {
 		ps.Error = s.err.Error()
@@ -79,7 +81,7 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 		downloader = mount.NewReservationGatedDownloader(&TransientSpaceManager{s.d})
 	}
 
-	s.mount, err = mount.Upgrade(mnt, s.d.throttleReaadyFetch, s.d.config.TransientsDir, s.key.String(), ps.TransientPath, downloader)
+	s.mount, err = mount.Upgrade(mnt, s.d.throttleReaadyFetch, s.d.config.TransientsDir, s.key.String(), ps.TransientPath, downloader, s.transientSize)
 	if err != nil {
 		return fmt.Errorf("failed to apply mount upgrader: %w", err)
 	}

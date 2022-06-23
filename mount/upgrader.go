@@ -73,7 +73,8 @@ type Upgrader struct {
 
 	fetches int32 // guarded by atomic
 
-	downloader TransientDownloader
+	downloader            TransientDownloader
+	memoizedTransientSize int64
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -81,16 +82,17 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, downloader TransientDownloader) (*Upgrader, error) {
+func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, downloader TransientDownloader, memoizedTransientSize int64) (*Upgrader, error) {
 	ret := &Upgrader{
-		underlying:   underlying,
-		key:          key,
-		rootdir:      rootdir,
-		once:         new(sync.Once),
-		throttler:    throttler,
-		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
-		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
-		downloader:   downloader,
+		underlying:            underlying,
+		key:                   key,
+		rootdir:               rootdir,
+		once:                  new(sync.Once),
+		throttler:             throttler,
+		pathComplete:          filepath.Join(rootdir, "transient-"+key+".complete"),
+		pathPartial:           filepath.Join(rootdir, "transient-"+key+".partial"),
+		downloader:            downloader,
+		memoizedTransientSize: memoizedTransientSize,
 	}
 	downloader.SetUpgrader(ret)
 
@@ -383,11 +385,18 @@ func (r *ReservationGatedDownloader) SetUpgrader(u *Upgrader) {
 }
 
 func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath string) error {
-	st, err := r.u.underlying.Stat(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to stat underlying: %w", err)
+	var knownSize int64
+	{
+		st, err := r.u.underlying.Stat(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to stat underlying: %w", err)
+		}
+		knownSize = st.Size
+		if knownSize == 0 {
+			knownSize = r.u.memoizedTransientSize
+		}
 	}
-	transientSizeKnown := st.Size != 0
+	transientSizeKnown := knownSize != 0
 
 	// create the destination file we need to download the mount contents to.
 	dst, err := os.Create(dstPath)
@@ -411,7 +420,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 			Jitter: true,
 		}
 		for {
-			reserved, err := r.tsm.Reserve(ctx, sk, nSuccessReserve, st.Size)
+			reserved, err := r.tsm.Reserve(ctx, sk, nSuccessReserve, knownSize)
 			if err == nil || err != ErrNotEnoughSpaceInTransientsDir {
 				return reserved, err
 			}
@@ -456,7 +465,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 			if err != nil {
 				return fmt.Errorf("failed to stat output file: %w", err)
 			}
-			if transientSizeKnown && fi.Size() == st.Size {
+			if transientSizeKnown && fi.Size() == knownSize {
 				return nil
 			}
 			if !hasMore {

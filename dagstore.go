@@ -452,7 +452,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	if d.automatedGcEnabled {
 		downloader = mount.NewReservationGatedDownloader(&TransientSpaceManager{d})
 	}
-	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, downloader)
+	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, downloader, 0)
 	if err != nil {
 		d.lk.Unlock()
 		return err
@@ -555,8 +555,9 @@ type Trace struct {
 
 type ShardInfo struct {
 	ShardState
-	Error error
-	refs  uint32
+	Error         error
+	refs          uint32
+	TransientSize int64
 }
 
 // GetShardInfo returns the current state of shard with key k.
@@ -571,7 +572,7 @@ func (d *DAGStore) GetShardInfo(k shard.Key) (ShardInfo, error) {
 	}
 
 	s.lk.RLock()
-	info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
+	info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs, TransientSize: s.transientSize}
 	s.lk.RUnlock()
 	return info, nil
 }
@@ -587,7 +588,7 @@ func (d *DAGStore) AllShardsInfo() AllShardsInfo {
 	ret := make(AllShardsInfo, len(d.shards))
 	for k, s := range d.shards {
 		s.lk.RLock()
-		info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs}
+		info := ShardInfo{ShardState: s.state, Error: s.err, refs: s.refs, TransientSize: s.transientSize}
 		s.lk.RUnlock()
 		ret[k] = info
 	}

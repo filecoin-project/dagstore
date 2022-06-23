@@ -29,6 +29,27 @@ func (e *GCResult) ShardFailures() int {
 	return failures
 }
 
+// performs GC to make space for the given shard's transient until the
+// size of the transients directory goes below the given traget.
+// can only be run from the event loop while holding a lock on the given shard.
+func (d *DAGStore) gcForShardReservation(shard *Shard, target float64) {
+	d.lk.RLock()
+	var reclaim []*Shard
+	for _, s := range d.shards {
+		if s.key == shard.key {
+			continue
+		}
+		s.lk.RLock()
+		if nAcq := len(s.wAcquire); (s.state == ShardStateAvailable || s.state == ShardStateErrored) && nAcq == 0 {
+			reclaim = append(reclaim, s)
+		}
+		s.lk.RUnlock()
+	}
+	d.lk.RUnlock()
+
+	d.lruGCReclaimable(reclaim, target)
+}
+
 // performs GC till the size of the transients directory goes below the given target.
 // can only be called from the event loop.
 func (d *DAGStore) gcUptoTarget(target float64) {
@@ -43,6 +64,10 @@ func (d *DAGStore) gcUptoTarget(target float64) {
 	}
 	d.lk.RUnlock()
 
+	d.lruGCReclaimable(reclaim, target)
+}
+
+func (d *DAGStore) lruGCReclaimable(reclaim []*Shard, target float64) {
 	// Sort in LRU order
 	sort.Slice(reclaim, func(i, j int) bool {
 		reclaim[i].lk.RLock()

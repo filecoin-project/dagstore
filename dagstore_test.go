@@ -416,6 +416,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	info, err := dagst.GetShardInfo(k)
 	require.NoError(t, err)
 	require.EqualValues(t, ShardStateInitializing, info.ShardState)
+	require.EqualValues(t, 0, info.TransientSize)
 
 	t.Log("closing")
 
@@ -485,6 +486,11 @@ func TestRestartResumesRegistration(t *testing.T) {
 	sz, err := dagst.transientDirSize()
 	require.NoError(t, err)
 	require.EqualValues(t, st.Size, sz)
+
+	// ensure shard transient size is as expected
+	info, err = dagst.GetShardInfo(k)
+	require.NoError(t, err)
+	require.EqualValues(t, st.Size, info.TransientSize)
 
 	// ensure we have indices.
 	idx, err := dagst.indices.GetFullIndex(k)

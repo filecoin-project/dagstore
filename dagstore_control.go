@@ -129,6 +129,14 @@ func (d *DAGStore) control() {
 			// or when recovering from a failure.
 
 			s.state = ShardStateAvailable
+
+			st, err := s.mount.Stat(d.ctx)
+			if err != nil {
+				log.Errorw("failed to stat transient", "shard", s.key, "error", err)
+			} else {
+				s.transientSize = st.Size
+			}
+
 			s.err = nil // nillify past errors
 
 			// notify the registration waiter, if there is one.
@@ -228,6 +236,7 @@ func (d *DAGStore) control() {
 
 		case OpShardFail:
 			s.state = ShardStateErrored
+			s.transientSize = 0
 			s.err = tsk.err
 
 			// notify the registration waiter, if there is one.
@@ -353,10 +362,8 @@ func (d *DAGStore) control() {
 				break
 			}
 
-			s.lk.Unlock()
 			// otherwise, perform a GC to make space for the reservation.
-			d.gcUptoTarget(float64(d.maxTransientDirSize - toReserve))
-			s.lk.Lock()
+			d.gcForShardReservation(s, float64(d.maxTransientDirSize-toReserve))
 
 			// if we have enough space available after the gc, allocate the reservation
 			if d.totalTransientDirSize+toReserve <= d.maxTransientDirSize {
