@@ -326,11 +326,10 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	if cfg.AutomatedGCEnabled {
+		dagst.garbageCollector = cfg.AutomatedGCConfig.GarbeCollectionStrategy
 		dagst.maxTransientDirSize = cfg.AutomatedGCConfig.MaxTransientDirSize
 		dagst.transientsGCWatermarkHigh = cfg.AutomatedGCConfig.TransientsGCWatermarkHigh
 		dagst.transientsGCWatermarkLow = cfg.AutomatedGCConfig.TransientsGCWatermarkLow
-
-		//TODO hydrate the garbage collection state.
 	}
 
 	var err error
@@ -389,6 +388,11 @@ func (d *DAGStore) Start(ctx context.Context) error {
 				// reset back to new, and queue the OpShardRegister.
 				s.state = ShardStateNew
 				toRegister = append(toRegister, s)
+			}
+
+			// all shards are reclaimable in the beginning
+			if d.automatedGCEnabled {
+				d.garbageCollector.NotifyReclaimable(s.key)
 			}
 		}
 	}
