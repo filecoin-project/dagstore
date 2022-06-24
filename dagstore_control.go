@@ -363,7 +363,7 @@ func (d *DAGStore) control() {
 			}
 
 			// otherwise, perform a GC to make space for the reservation.
-			d.gcForShardReservation(s, float64(d.maxTransientDirSize-toReserve))
+			d.gcUptoTarget(float64(d.maxTransientDirSize - toReserve))
 
 			// if we have enough space available after the gc, allocate the reservation
 			if d.totalTransientDirSize+toReserve <= d.maxTransientDirSize {
@@ -387,6 +387,9 @@ func (d *DAGStore) control() {
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
 		}
+
+		// update the GarbageCollector
+		d.notifyGarbageCollector(s.key, s, tsk.op)
 
 		// persist the current shard state.
 		if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
@@ -413,6 +416,28 @@ func (d *DAGStore) control() {
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
 
 		s.lk.Unlock()
+	}
+}
+
+func (d *DAGStore) notifyGarbageCollector(key shard.Key, s *Shard, op OpType) {
+	if d.garbageCollector == nil {
+		return
+	}
+	if op == OpShardDestroy {
+		d.garbageCollector.NotifyRemoved(s.key)
+		return
+	}
+
+	// notify the garbage collector if shard was accessed
+	if op == OpShardAcquire {
+		d.garbageCollector.NotifyAccessed(key)
+	}
+
+	// notify the garbage collector if shard is in a state where it can be reclaimed/gc'd.
+	if nAcq := len(s.wAcquire); nAcq == 0 && (s.state == ShardStateAvailable || s.state == ShardStateErrored) {
+		d.garbageCollector.NotifyReclaimable(key)
+	} else {
+		d.garbageCollector.NotifyNotReclaimable(key)
 	}
 }
 

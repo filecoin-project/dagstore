@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/filecoin-project/dagstore/gc"
+
 	mh "github.com/multiformats/go-multihash"
 
 	carindex "github.com/ipld/go-car/v2/index"
@@ -121,6 +123,9 @@ type DAGStore struct {
 	// Automated GC state
 	// guarded by the event loop
 	totalTransientDirSize int64
+
+	// should only be accessed and invoked from the event loop
+	garbageCollector gc.GarbageCollector
 
 	// immutable, can be read anywhere without a lock.
 	automatedGcEnabled        bool
