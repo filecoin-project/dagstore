@@ -13,8 +13,7 @@ import (
 type GCResult struct {
 	// Shards includes an entry for every shard whose transient was reclaimed.
 	// Nil error values indicate success.
-	Shards                  map[shard.Key]error
-	TransientDirSizeAfterGC int64
+	Shards map[shard.Key]error
 }
 
 // ShardFailures returns the number of shards whose transient reclaim failed.
@@ -28,8 +27,10 @@ func (e *GCResult) ShardFailures() int {
 	return failures
 }
 
-// performs GC till the size of the transients directory goes below the given target.
-// can only be called from the event loop.
+// gcUptoTarget GC's transients till the size of the transients directory
+// goes below the given target. It relies on the configured Garbage Collector to return a list of shards
+// whose transients can be GC'd prioritized in the order they should be GC'd in.
+// This method can only be called from the event loop.
 func (d *DAGStore) gcUptoTarget(target float64) {
 	reclaimable := d.garbageCollector.Reclaimable()
 
@@ -41,10 +42,11 @@ func (d *DAGStore) gcUptoTarget(target float64) {
 	// attempt to delete transients of reclaimed shards.
 	for _, sk := range reclaimable {
 		if float64(d.totalTransientDirSize) <= target {
-			return
+			break
 		}
 
 		s := d.shards[sk]
+
 		// only read lock: we're not modifying state, and the mount has its own lock.
 		s.lk.RLock()
 		freed, err := s.mount.DeleteTransient()
@@ -105,7 +107,6 @@ func (d *DAGStore) manualGC(resCh chan *GCResult) {
 		s.lk.RUnlock()
 	}
 
-	res.TransientDirSizeAfterGC = d.totalTransientDirSize
 	select {
 	case resCh <- res:
 	case <-d.ctx.Done():

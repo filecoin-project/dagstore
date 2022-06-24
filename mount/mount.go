@@ -15,10 +15,6 @@ var (
 	// ErrRandomAccessUnsupported is returned when ReadAt is called on a mount
 	// that does not support random access.
 	ErrRandomAccessUnsupported = errors.New("mount does not support random access")
-
-	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
-	// for a transient because we do not have enough space in the transients directory.
-	ErrNotEnoughSpaceInTransientsDir = errors.New("not enough space in the transient directory")
 )
 
 // Kind is an enum describing the source of a Mount.
