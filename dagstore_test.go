@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/dagstore/gc"
+
 	"github.com/multiformats/go-multihash"
 
 	"github.com/ipfs/go-datastore"
@@ -385,6 +387,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	})
 	require.NoError(t, err)
@@ -448,6 +451,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	})
 	require.NoError(t, err)
@@ -525,6 +529,7 @@ func TestGC(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	})
 	require.NoError(t, err)
@@ -741,6 +746,7 @@ func TestIndexingFailure(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	})
 	require.NoError(t, err)
@@ -986,6 +992,7 @@ func TestFailureRecovery(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	})
 
@@ -1056,6 +1063,7 @@ func TestRecoveryOnStart(t *testing.T) {
 			MaxTransientDirSize:       math.MaxInt64,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
 		},
 	}
 	dagst, err := NewDAGStore(config)

@@ -14,6 +14,8 @@ type GCResult struct {
 	// Shards includes an entry for every shard whose transient was reclaimed.
 	// Nil error values indicate success.
 	Shards map[shard.Key]error
+	// TransientDirSizeAfterGC is the size of the transients directory after a round of manual GC.
+	TransientDirSizeAfterGC int64
 }
 
 // ShardFailures returns the number of shards whose transient reclaim failed.
@@ -106,6 +108,8 @@ func (d *DAGStore) manualGC(resCh chan *GCResult) {
 		}
 		s.lk.RUnlock()
 	}
+
+	res.TransientDirSizeAfterGC = d.totalTransientDirSize
 
 	select {
 	case resCh <- res:

@@ -70,7 +70,7 @@ func (d *DAGStore) control() {
 			continue
 		}
 		// perform GC if the transients directory has already gone above the watermark and automated gc is enabled.
-		if d.automatedGcEnabled {
+		if d.automatedGCEnabled {
 			maxTransientDirSize := d.maxTransientDirSize
 			transientsGCWatermarkHigh := d.transientsGCWatermarkHigh
 			transientsGCWatermarkLow := d.transientsGCWatermarkLow
@@ -371,7 +371,7 @@ func (d *DAGStore) control() {
 
 			// we weren't able to make space for the reservation request even after a GC attempt.
 			// fail the reservation request.
-			tsk.reservationReq.response <- &reservationResp{err: mount.ErrNotEnoughSpaceInTransientsDir}
+			tsk.reservationReq.response <- &reservationResp{err: ErrNotEnoughSpaceInTransientsDir}
 
 		case OpShardReleaseTransientReservation:
 			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {
@@ -460,13 +460,17 @@ func (d *DAGStore) consumeNext() (tsk *task, gc chan *GCResult, error error) {
 	}
 }
 
-type TransientSpaceManager struct {
+var _ mount.TransientAllocator = (*transientAllocator)(nil)
+
+// transientAllocator submits messages to the event loop to reserve and release space
+// for transient downloads when the mount does not know the size of the transient to be downloaded upfront.
+type transientAllocator struct {
 	d *DAGStore
 }
 
-func (t *TransientSpaceManager) Reserve(ctx context.Context, k shard.Key, nPrevReservations int64, toReserve int64) (reserved int64, err error) {
+func (t *transientAllocator) Reserve(ctx context.Context, key shard.Key, nPrevReservations int64, toReserve int64) (reserved int64, err error) {
 	t.d.lk.Lock()
-	s, ok := t.d.shards[k]
+	s, ok := t.d.shards[key]
 	if !ok {
 		t.d.lk.Unlock()
 		return 0, ErrShardUnknown
@@ -489,16 +493,16 @@ func (t *TransientSpaceManager) Reserve(ctx context.Context, k shard.Key, nPrevR
 	}
 
 	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
 	case resp := <-out:
 		return resp.reserved, resp.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
 	}
 }
 
-func (t *TransientSpaceManager) Release(_ context.Context, k shard.Key, n int64) error {
+func (t *transientAllocator) Release(_ context.Context, key shard.Key, release int64) error {
 	t.d.lk.Lock()
-	s, ok := t.d.shards[k]
+	s, ok := t.d.shards[key]
 	if !ok {
 		t.d.lk.Unlock()
 		return ErrShardUnknown
@@ -506,7 +510,7 @@ func (t *TransientSpaceManager) Release(_ context.Context, k shard.Key, n int64)
 	t.d.lk.Unlock()
 
 	tsk := &task{op: OpShardReleaseTransientReservation, shard: s,
-		releaseReq: &releaseReq{release: n}}
+		releaseReq: &releaseReq{release: release}}
 
 	return t.d.queueTask(tsk, t.d.completionCh)
 }

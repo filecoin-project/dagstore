@@ -367,18 +367,18 @@ func ReservationBackOffRetryOpt(minBackoff, maxBackoff time.Duration, factor, ma
 type ReservationGatedDownloader struct {
 	key                    shard.Key
 	knownTransientSize     int64
-	tsm                    TransientAllocator
+	allocator              TransientAllocator
 	minBackOffWait         time.Duration
 	maxBackoffWait         time.Duration
 	backOffFactor          float64
 	maxReservationAttempts float64
 }
 
-func NewReservationGatedDownloader(key shard.Key, knownTransientSize int64, tsm TransientAllocator, opts ...ReservationGatedDownloaderOpt) *ReservationGatedDownloader {
+func NewReservationGatedDownloader(key shard.Key, knownTransientSize int64, allocator TransientAllocator, opts ...ReservationGatedDownloaderOpt) *ReservationGatedDownloader {
 	r := &ReservationGatedDownloader{
 		key:                    key,
 		knownTransientSize:     knownTransientSize,
-		tsm:                    tsm,
+		allocator:              allocator,
 		minBackOffWait:         minReservationBackOff,
 		maxBackoffWait:         maxReservationBackOff,
 		backOffFactor:          factor,
@@ -435,7 +435,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 			Jitter: true,
 		}
 		for {
-			reserved, err := r.tsm.Reserve(ctx, r.key, nPrevReservations, toReserve)
+			reserved, err := r.allocator.Reserve(ctx, r.key, nPrevReservations, toReserve)
 			if err == nil {
 				return reserved, nil
 			}
@@ -498,7 +498,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 			log.Errorw("failed to remove transient for failed download, will not release reservation", "path", outpath, "error", err)
 			return rerr
 		}
-		if err := r.tsm.Release(ctx, r.key, totalReserved); err != nil {
+		if err := r.allocator.Release(ctx, r.key, totalReserved); err != nil {
 			log.Errorw("failed to release reservation", "error", err)
 		}
 		return rerr
@@ -516,7 +516,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 		return releaseOnError(statErr)
 	}
 	if totalReserved > fi.Size() {
-		return r.tsm.Release(ctx, r.key, totalReserved-fi.Size())
+		return r.allocator.Release(ctx, r.key, totalReserved-fi.Size())
 	}
 
 	return nil
