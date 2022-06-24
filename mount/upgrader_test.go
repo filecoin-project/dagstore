@@ -117,8 +117,8 @@ func TestUpgrade(t *testing.T) {
 
 			mnt := tcc.createMnt(t, key, rootDir)
 
-			downloader := NewReservationGatedDownloader(&simplMockTransientManager{})
-			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial, downloader, 0)
+			downloader := NewReservationGatedDownloader(shard.KeyFromString(key), 0, &simplMockTransientManager{})
+			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial, downloader)
 			require.NoError(t, err)
 			require.NotNil(t, u)
 
@@ -150,7 +150,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	key := fmt.Sprintf("%d", rand.Uint64())
 	rootDir := t.TempDir()
-	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", &SimpleDownloader{}, 0)
+	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", &SimpleDownloader{})
 	require.NoError(t, err)
 	require.Zero(t, mnt.Count())
 
@@ -252,8 +252,8 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 			underlyings := make([]*blockingReaderMount, 100)
 			for i := range upgraders {
 				underlyings[i] = &blockingReaderMount{isReady: tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
-				downloader := NewReservationGatedDownloader(&simplMockTransientManager{})
-				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "", downloader, 0)
+				downloader := NewReservationGatedDownloader(shard.KeyFromString("foo"), 0, &simplMockTransientManager{})
+				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "", downloader)
 				require.NoError(t, err)
 				upgraders[i] = u
 			}

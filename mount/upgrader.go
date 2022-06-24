@@ -20,24 +20,39 @@ import (
 )
 
 var (
-	readBufferSize = 32 * 1024
+	readBufferSize = 64 * 1024 // 64 K
 	log            = logging.Logger("dagstore/upgrader")
 
 	// 5s, 7s, 11s, 16s, 25s, 38s, 1m
-	minBackOff             = 5 * time.Second
-	maxBackOff             = 1 * time.Minute
-	factor                 = 1.5
-	maxReservationAttempts = 7
+	minReservationBackOff  = 5 * time.Second // minimum backoff time before making a new reservation attempt
+	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt.
+	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests.
+	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up.
 )
 
-type TransientSpaceManager interface {
-	Reserve(ctx context.Context, k shard.Key, count int64, toReserve int64) (reserved int64, err error)
-	Release(ctx context.Context, k shard.Key, n int64) error
+// TransientAllocator manages allocations for downloading a transient whose size is not known upfront.
+// It reserves space for the transient with the allocator when the transient is  being downloaded and releases unused reservations
+// back to the allocator after the transient download finishes or errors out.
+type TransientAllocator interface {
+	// Reserve attempts to reserve `toReserve` bytes for the transient and returns the number
+	// of bytes actually reserved or any error encountered when trying to make the reservation.
+	// The `nPrevReservations` param denotes the number of previous successful reservations
+	// the caller has had for an ongoing download.
+	// Note: reserved != 0 if and only if err == nil.
+	Reserve(ctx context.Context, k shard.Key, nPrevReservations int64, toReserve int64) (reserved int64, err error)
+
+	// Release releases back `toRelease` bytes to the allocator.
+	// The bytes that are released here are the ones that were previously obtained by making a `Reserve` call to the allocator
+	// but were not used either because the transient download errored out or because the size of the downloaded transient
+	// was less than the number of bytes reserved.
+	Release(ctx context.Context, k shard.Key, toRelease int64) error
 }
 
+// TransientDownloader manages the process of downloading a transient locally from a Mount
+// when we are upgrading a Mount that does NOT have random access capabilities.
 type TransientDownloader interface {
-	SetUpgrader(u *Upgrader)
-	Download(ctx context.Context, outPath string) error
+	// Download downloads the transient from the remote Mount to the given output path.
+	Download(ctx context.Context, underlying Mount, outpath string) error
 }
 
 // Upgrader is a bridge to upgrade any Mount into one with full-featured
@@ -52,6 +67,7 @@ type Upgrader struct {
 	throttler   throttle.Throttler
 	key         string
 	passthrough bool
+	downloader  TransientDownloader
 
 	// paths: pathComplete is the path of transients that are
 	// completely downloaded; pathPartial is the path where in-progress
@@ -72,9 +88,6 @@ type Upgrader struct {
 	onceErr error      // NOT guarded by lk; access coordinated by sync.Once
 
 	fetches int32 // guarded by atomic
-
-	downloader            TransientDownloader
-	memoizedTransientSize int64
 }
 
 var _ Mount = (*Upgrader)(nil)
@@ -82,20 +95,17 @@ var _ Mount = (*Upgrader)(nil)
 // Upgrade constructs a new Upgrader for the underlying Mount. If provided, it
 // will reuse the file in path `initial` as the initial transient copy. Whenever
 // a new transient copy has to be created, it will be created under `rootdir`.
-func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, downloader TransientDownloader, memoizedTransientSize int64) (*Upgrader, error) {
+func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string, initial string, downloader TransientDownloader) (*Upgrader, error) {
 	ret := &Upgrader{
-		underlying:            underlying,
-		key:                   key,
-		rootdir:               rootdir,
-		once:                  new(sync.Once),
-		throttler:             throttler,
-		pathComplete:          filepath.Join(rootdir, "transient-"+key+".complete"),
-		pathPartial:           filepath.Join(rootdir, "transient-"+key+".partial"),
-		downloader:            downloader,
-		memoizedTransientSize: memoizedTransientSize,
+		underlying:   underlying,
+		key:          key,
+		downloader:   downloader,
+		rootdir:      rootdir,
+		once:         new(sync.Once),
+		throttler:    throttler,
+		pathComplete: filepath.Join(rootdir, "transient-"+key+".complete"),
+		pathPartial:  filepath.Join(rootdir, "transient-"+key+".partial"),
 	}
-	downloader.SetUpgrader(ret)
-
 	if ret.rootdir == "" {
 		ret.rootdir = os.TempDir() // use the OS' default temp dir.
 	}
@@ -253,7 +263,7 @@ func (u *Upgrader) Close() error {
 	return nil
 }
 
-func (u *Upgrader) refetch(ctx context.Context, outPath string) error {
+func (u *Upgrader) refetch(ctx context.Context, outpath string) error {
 	log.Debugw("actually refetching", "shard", u.key)
 
 	// sanity check on underlying mount.
@@ -275,7 +285,7 @@ func (u *Upgrader) refetch(ctx context.Context, outPath string) error {
 	}
 
 	err = t.Do(ctx, func(ctx context.Context) error {
-		return u.downloader.Download(ctx, outPath)
+		return u.downloader.Download(ctx, u.underlying, outpath)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch and copy underlying mount to transient file: %w", err)
@@ -317,23 +327,21 @@ func (u *Upgrader) DeleteTransient() (release int64, err error) {
 	return size, err
 }
 
-type SimpleDownloader struct {
-	u *Upgrader
-}
+// SimpleDownloader simply downloads the transient locally from the mount
+// by copying the mount reader to the given output path. It does not make
+// any reservation requests when downloading the transient.
+// Use this when automated GC is disabled.
+type SimpleDownloader struct{}
 
-func (s *SimpleDownloader) SetUpgrader(u *Upgrader) {
-	s.u = u
-}
-
-func (s *SimpleDownloader) Download(ctx context.Context, dstPath string) error {
+func (s *SimpleDownloader) Download(ctx context.Context, underlying Mount, outpath string) error {
 	// fetch from underlying and copy.
-	from, err := s.u.underlying.Fetch(ctx)
+	from, err := underlying.Fetch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch from underlying mount: %w", err)
 	}
 	defer from.Close()
 
-	into, err := os.Create(dstPath)
+	into, err := os.Create(outpath)
 	if err != nil {
 		return fmt.Errorf("failed to create out file: %w", err)
 	}
@@ -343,9 +351,10 @@ func (s *SimpleDownloader) Download(ctx context.Context, dstPath string) error {
 	return err
 }
 
+// ReservationGatedDownloaderOpt are options for configuring the ReservationGatedDownloader.
 type ReservationGatedDownloaderOpt func(r *ReservationGatedDownloader)
 
-// ReservationBackOffRetryOpt configures the backoff retry parameters for the transient space reservation attempts.
+// ReservationBackOffRetryOpt configures the backoff-retry parameters for the reservation attempts when downloading transients.
 func ReservationBackOffRetryOpt(minBackoff, maxBackoff time.Duration, factor, maxReservationAttempts float64) ReservationGatedDownloaderOpt {
 	return func(r *ReservationGatedDownloader) {
 		r.minBackOffWait = minBackoff
@@ -356,19 +365,22 @@ func ReservationBackOffRetryOpt(minBackoff, maxBackoff time.Duration, factor, ma
 }
 
 type ReservationGatedDownloader struct {
-	u                      *Upgrader
-	tsm                    TransientSpaceManager
+	key                    shard.Key
+	knownTransientSize     int64
+	tsm                    TransientAllocator
 	minBackOffWait         time.Duration
 	maxBackoffWait         time.Duration
 	backOffFactor          float64
 	maxReservationAttempts float64
 }
 
-func NewReservationGatedDownloader(tsm TransientSpaceManager, opts ...ReservationGatedDownloaderOpt) *ReservationGatedDownloader {
+func NewReservationGatedDownloader(key shard.Key, knownTransientSize int64, tsm TransientAllocator, opts ...ReservationGatedDownloaderOpt) *ReservationGatedDownloader {
 	r := &ReservationGatedDownloader{
+		key:                    key,
+		knownTransientSize:     knownTransientSize,
 		tsm:                    tsm,
-		minBackOffWait:         minBackOff,
-		maxBackoffWait:         maxBackOff,
+		minBackOffWait:         minReservationBackOff,
+		maxBackoffWait:         maxReservationBackOff,
 		backOffFactor:          factor,
 		maxReservationAttempts: float64(maxReservationAttempts),
 	}
@@ -380,38 +392,41 @@ func NewReservationGatedDownloader(tsm TransientSpaceManager, opts ...Reservatio
 	return r
 }
 
-func (r *ReservationGatedDownloader) SetUpgrader(u *Upgrader) {
-	r.u = u
-}
-
-func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath string) error {
-	var knownSize int64
+func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mount, outpath string) error {
+	// Do we already know the size of the transient to be downloaded upfront ?
+	// If we do, this will allows us to request a reservation of that size to the allocator.
+	// 1. Stat the Mount to see if it has a fixed known size
+	// 2. If the Mount does not have the size, check if we have a memoized transient size from a previous successful download.
+	// 3. Otherwise, we do not know the size of the transient upfront and we will have to rely on the allocator
+	//    to give us reservations based on it it's internal configuration.
+	var toReserve int64
 	{
-		st, err := r.u.underlying.Stat(ctx)
+		st, err := underlying.Stat(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to stat underlying: %w", err)
 		}
-		knownSize = st.Size
-		if knownSize == 0 {
-			knownSize = r.u.memoizedTransientSize
+		toReserve = st.Size
+		if toReserve == 0 {
+			toReserve = r.knownTransientSize
 		}
 	}
-	transientSizeKnown := knownSize != 0
+	transientSizeKnown := toReserve != 0
 
 	// create the destination file we need to download the mount contents to.
-	dst, err := os.Create(dstPath)
+	dst, err := os.Create(outpath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer dst.Close()
 
-	from, err := r.u.underlying.Fetch(ctx)
+	from, err := underlying.Fetch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch underlying mount: %w", err)
 	}
-	sk := shard.KeyFromString(r.u.key)
 
-	reserveWithBackoff := func(nSuccessReserve int64) (reserved int64, err error) {
+	// reserveWithBackoff attempts to make a reservation with the allocator using back-off retry mechanism
+	// in case of a failue.
+	reserveWithBackoff := func(nPrevReservations int64) (reserved int64, err error) {
 		// back-off retry before failing
 		backoff := &backoff.Backoff{
 			Min:    r.minBackOffWait,
@@ -420,9 +435,9 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 			Jitter: true,
 		}
 		for {
-			reserved, err := r.tsm.Reserve(ctx, sk, nSuccessReserve, knownSize)
-			if err == nil || err != ErrNotEnoughSpaceInTransientsDir {
-				return reserved, err
+			reserved, err := r.tsm.Reserve(ctx, r.key, nPrevReservations, toReserve)
+			if err == nil {
+				return reserved, nil
 			}
 			nAttempts := backoff.Attempt() + 1
 			if nAttempts >= r.maxReservationAttempts {
@@ -441,17 +456,18 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 	}
 
 	totalReserved := int64(0)
+
 	downloadErr := func() error {
-		nSuccessReserve := int64(0)
+		nPrevReservations := int64(0)
 		for {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			reserved, err := reserveWithBackoff(nSuccessReserve)
+			reserved, err := reserveWithBackoff(nPrevReservations)
 			if err != nil {
 				return fmt.Errorf("failed to make a reservation: %w", err)
 			}
-			nSuccessReserve++
+			nPrevReservations++
 			totalReserved = totalReserved + reserved
 
 			hasMore, err := downloadNBytes(ctx, from, reserved, dst)
@@ -459,13 +475,13 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 				return fmt.Errorf("failed to download: %w", err)
 			}
 
-			// if we've already read as many bytes as the the size indicated by the underlying mount,
+			// if we know the size of the transient upfront and we've already read as many bytes,
 			// short-circuit and return here instead if doing one more round to see an EOF.
 			fi, err := dst.Stat()
 			if err != nil {
 				return fmt.Errorf("failed to stat output file: %w", err)
 			}
-			if transientSizeKnown && fi.Size() == knownSize {
+			if transientSizeKnown && fi.Size() == toReserve {
 				return nil
 			}
 			if !hasMore {
@@ -474,13 +490,15 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 		}
 	}()
 
+	// releaseOnError removes the downloaded file and releases ALL bytes we reserved for this download
+	// if the download fails with an error.
 	releaseOnError := func(rerr error) error {
 		// if we fail to remove the file, something has gone wrong and we shouldn't release the bytes to be on the safe side.
-		if err := os.Remove(dstPath); err != nil {
-			log.Errorw("failed to remove transient for failed download, will not release reservation", "path", dstPath, "error", err)
+		if err := os.Remove(outpath); err != nil {
+			log.Errorw("failed to remove transient for failed download, will not release reservation", "path", outpath, "error", err)
 			return rerr
 		}
-		if err := r.tsm.Release(ctx, sk, totalReserved); err != nil {
+		if err := r.tsm.Release(ctx, r.key, totalReserved); err != nil {
 			log.Errorw("failed to release reservation", "error", err)
 		}
 		return rerr
@@ -498,7 +516,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, dstPath strin
 		return releaseOnError(statErr)
 	}
 	if totalReserved > fi.Size() {
-		return r.tsm.Release(ctx, sk, totalReserved-fi.Size())
+		return r.tsm.Release(ctx, r.key, totalReserved-fi.Size())
 	}
 
 	return nil
