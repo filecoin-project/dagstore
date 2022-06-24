@@ -3,7 +3,6 @@ package dagstore
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/filecoin-project/dagstore/mount"
 
@@ -165,7 +164,6 @@ func (d *DAGStore) control() {
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
-			s.lastAccessedAt = time.Now()
 			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
