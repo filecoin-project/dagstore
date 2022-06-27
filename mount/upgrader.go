@@ -164,12 +164,6 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		// TODO add size check.
 	}
 
-	// reset once if the previous fetch errored with a quota reservation error so we can retry.
-	if xerrors.Is(u.onceErr, ErrNotEnoughSpaceInTransientsDir) {
-		u.once = new(sync.Once)
-		u.onceErr = nil
-	}
-
 	// transient appears to be dead, refetch.
 	// get the current sync under the lock, use it to deduplicate concurrent fetches.
 	once := u.once
@@ -184,6 +178,14 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		u.onceErr = u.refetch(ctx, u.pathPartial)
 		if u.onceErr != nil {
 			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
+			// refetch can and should be retried if it errors out because of not enough
+			// space in the transients directory.
+			if xerrors.Is(u.onceErr, ErrNotEnoughSpaceInTransientsDir) {
+				u.lk.Lock()
+				u.once = new(sync.Once)
+				u.lk.Unlock()
+			}
+
 			return
 		}
 
