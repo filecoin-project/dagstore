@@ -342,10 +342,11 @@ func (d *DAGStore) control() {
 			}
 
 			toReserve := tsk.reservationReq.want
-			unknownReservationSize := toReserve == 0
+			reservationSizeUnknown := toReserve == 0
 
-			// increase the space allocated exponentially as more reservations are requested for the shard.
-			if unknownReservationSize {
+			// increase the space allocated exponentially as more reservations are requested for a shard whose
+			// transient size is unknown upfront.
+			if reservationSizeUnknown {
 				factor := int64(1 << tsk.reservationReq.nPrevReservations)
 				toReserve = factor * int64(defaultReservation)
 			}
@@ -387,7 +388,7 @@ func (d *DAGStore) control() {
 		}
 
 		// update the GarbageCollector
-		d.notifyGarbageCollector(s.key, s, tsk.op)
+		d.notifyGCStrategy(s.key, s, tsk.op)
 
 		// persist the current shard state.
 		if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
@@ -417,7 +418,7 @@ func (d *DAGStore) control() {
 	}
 }
 
-func (d *DAGStore) notifyGarbageCollector(key shard.Key, s *Shard, op OpType) {
+func (d *DAGStore) notifyGCStrategy(key shard.Key, s *Shard, op OpType) {
 	if op == OpShardDestroy {
 		d.gcs.NotifyRemoved(s.key)
 		return
