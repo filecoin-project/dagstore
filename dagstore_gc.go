@@ -34,7 +34,7 @@ func (e *GCResult) ShardFailures() int {
 // whose transients can be GC'd prioritized in the order they should be GC'd in.
 // This method can only be called from the event loop.
 func (d *DAGStore) gcUptoTarget(target float64) {
-	reclaimable := d.garbageCollector.Reclaimable()
+	reclaimable := d.gcs.Reclaimable()
 
 	d.lk.RLock()
 	defer d.lk.RUnlock()
@@ -65,7 +65,7 @@ func (d *DAGStore) gcUptoTarget(target float64) {
 		s.lk.RUnlock()
 	}
 
-	d.garbageCollector.NotifyReclaimed(reclaimed)
+	d.gcs.NotifyReclaimed(reclaimed)
 }
 
 // manualGC performs DAGStore GC. Refer to DAGStore#GC for more information.

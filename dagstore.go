@@ -132,13 +132,13 @@ type DAGStore struct {
 	totalTransientDirSize int64
 	//
 	// The garbage collector strategy we are using; calls to this should only be made from the event loop
-	garbageCollector gc.GarbageCollector
+	gcs gc.GarbageCollectionStrategy
 	//
 	// immutable, can be read anywhere without a lock.
+	automatedGCEnabled        bool
 	maxTransientDirSize       int64
 	transientsGCWatermarkHigh float64
 	transientsGCWatermarkLow  float64
-	automatedGCEnabled        bool
 }
 
 var _ Interface = (*DAGStore)(nil)
@@ -182,8 +182,8 @@ type ShardResult struct {
 
 type AutomatedGCConfig struct {
 	// GarbeCollectionStrategy specifies the garbage collection strategy we will use
-	// for the automated watermark based GC features. See the documentation of `gc.GarbageCollector` for more details.
-	GarbeCollectionStrategy gc.GarbageCollector
+	// for the automated watermark based GC features. See the documentation of `gc.GarbageCollectionStrategy` for more details.
+	GarbeCollectionStrategy gc.GarbageCollectionStrategy
 
 	// MaxTransientDirSize specifies the maximum allowable size of the transients directory.
 	MaxTransientDirSize int64
@@ -315,6 +315,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		ctx:                 ctx,
 		cancelFn:            cancel,
 		automatedGCEnabled:  cfg.AutomatedGCEnabled,
+		gcs:                 &gc.NoOpStrategy{},
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
@@ -325,8 +326,8 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dagst.throttleReaadyFetch = throttle.Fixed(max)
 	}
 
-	if cfg.AutomatedGCEnabled {
-		dagst.garbageCollector = cfg.AutomatedGCConfig.GarbeCollectionStrategy
+	if dagst.automatedGCEnabled {
+		dagst.gcs = cfg.AutomatedGCConfig.GarbeCollectionStrategy
 		dagst.maxTransientDirSize = cfg.AutomatedGCConfig.MaxTransientDirSize
 		dagst.transientsGCWatermarkHigh = cfg.AutomatedGCConfig.TransientsGCWatermarkHigh
 		dagst.transientsGCWatermarkLow = cfg.AutomatedGCConfig.TransientsGCWatermarkLow
@@ -391,9 +392,7 @@ func (d *DAGStore) Start(ctx context.Context) error {
 			}
 
 			// all shards are reclaimable in the beginning
-			if d.automatedGCEnabled {
-				d.garbageCollector.NotifyReclaimable(s.key)
-			}
+			d.gcs.NotifyReclaimable(s.key)
 		}
 	}
 

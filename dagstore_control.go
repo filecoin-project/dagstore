@@ -418,24 +418,21 @@ func (d *DAGStore) control() {
 }
 
 func (d *DAGStore) notifyGarbageCollector(key shard.Key, s *Shard, op OpType) {
-	if d.garbageCollector == nil {
-		return
-	}
 	if op == OpShardDestroy {
-		d.garbageCollector.NotifyRemoved(s.key)
+		d.gcs.NotifyRemoved(s.key)
 		return
 	}
 
 	// notify the garbage collector if shard was accessed
 	if op == OpShardAcquire {
-		d.garbageCollector.NotifyAccessed(key)
+		d.gcs.NotifyAccessed(key)
 	}
 
 	// notify the garbage collector if shard is in a state where it can be reclaimed/gc'd.
 	if nAcq := len(s.wAcquire); nAcq == 0 && (s.state == ShardStateAvailable || s.state == ShardStateErrored) {
-		d.garbageCollector.NotifyReclaimable(key)
+		d.gcs.NotifyReclaimable(key)
 	} else {
-		d.garbageCollector.NotifyNotReclaimable(key)
+		d.gcs.NotifyNotReclaimable(key)
 	}
 }
 

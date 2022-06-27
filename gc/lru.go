@@ -7,7 +7,7 @@ import (
 	"github.com/filecoin-project/dagstore/shard"
 )
 
-var _ GarbageCollector = (*LRUGarbageCollector)(nil)
+var _ GarbageCollectionStrategy = (*LRUGarbageCollector)(nil)
 
 type shardMetadata struct {
 	key            shard.Key
@@ -15,6 +15,8 @@ type shardMetadata struct {
 	lastAccessedAt time.Time
 }
 
+// LRUGarbageCollector implements a `Least Recently Used` strategy for
+// determining the order in which the reclaimable shards it is tracking should be GC'd.
 type LRUGarbageCollector struct {
 	shards map[shard.Key]*shardMetadata
 }
