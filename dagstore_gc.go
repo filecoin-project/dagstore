@@ -18,6 +18,22 @@ type GCResult struct {
 	TransientDirSizeAfterGC int64
 }
 
+// AutomatedGCResult is the result of reclaiming a transient as part of an Automated GC.
+type AutomatedGCResult struct {
+	// TransientsAccountingBeforeReclaim is the sum of the actual contents on disk and the number of bytes reserved
+	// but still not written before a shard was reclaimed.
+	TransientsAccountingBeforeReclaim int64
+	// TransientsAccountingAfterReclaim is the sum of the actual contents on disk and the number of bytes reserved
+	// but still not written after a shard was reclaimed.
+	TransientsAccountingAfterReclaim int64
+	// TransientsDirSizeBeforeReclaim indicates the size of the transient directory before a shard transient was removed.
+	TransientsDirSizeBeforeReclaim int64
+	// TransientsDirSizeAfterReclaim indicates the size of the transient directory after a shard transient was removed.
+	TransientsDirSizeAfterReclaim int64
+	// ReclaimedShard is the key of the shard whose transient was reclaimed by an Automated GC.
+	ReclaimedShard shard.Key
+}
+
 // ShardFailures returns the number of shards whose transient reclaim failed.
 func (e *GCResult) ShardFailures() int {
 	var failures int
@@ -50,13 +66,39 @@ func (d *DAGStore) gcUptoTarget(target float64) {
 		s := d.shards[sk]
 
 		// only read lock: we're not modifying state, and the mount has its own lock.
+		before := d.totalTransientDirSize
+		beforeReclaimDiskSize, err := d.transientDirSize()
+		if err != nil {
+			log.Errorw("failed to fetch transient dir size", "error", err)
+		}
 		s.lk.RLock()
 		freed, err := s.mount.DeleteTransient()
 		if err != nil {
 			log.Warnw("failed to delete transient", "shard", s.key, "error", err)
 		}
+
 		d.totalTransientDirSize -= freed
 		reclaimed = append(reclaimed, sk)
+
+		if d.automatedgcTraceCh != nil {
+			afterReclaimDiskSize, err := d.transientDirSize()
+			if err != nil {
+				log.Errorw("failed to fetch transient dir size", "error", err)
+			}
+			result := &AutomatedGCResult{
+				TransientsAccountingBeforeReclaim: before,
+				TransientsAccountingAfterReclaim:  d.totalTransientDirSize,
+				TransientsDirSizeBeforeReclaim:    beforeReclaimDiskSize,
+				TransientsDirSizeAfterReclaim:     afterReclaimDiskSize,
+				ReclaimedShard:                    sk,
+			}
+
+			select {
+			case d.automatedgcTraceCh <- result:
+			case <-d.ctx.Done():
+				return
+			}
+		}
 
 		// flush the shard state to the datastore.
 		if err := s.persist(d.ctx, d.config.Datastore); err != nil {

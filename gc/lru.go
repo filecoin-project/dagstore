@@ -76,6 +76,8 @@ func (l *LRUGarbageCollector) Reclaimable() []shard.Key {
 	return keys
 }
 
-func (l *LRUGarbageCollector) NotifyReclaimed([]shard.Key) {
-	// No-Op.
+func (l *LRUGarbageCollector) NotifyReclaimed(keys []shard.Key) {
+	for _, k := range keys {
+		delete(l.shards, k)
+	}
 }

@@ -1474,7 +1474,14 @@ func TestAcquireContextCancelled(t *testing.T) {
 	require.NotNil(t, res.Accessor)
 	err = res.Accessor.Close()
 	require.NoError(t, err)
+}
 
+func registerShardSync(t *testing.T, dagst *DAGStore, key shard.Key, mnt mount.Mount, opts RegisterOpts) error {
+	ch := make(chan ShardResult, 1)
+	err := dagst.RegisterShard(context.Background(), key, mnt, ch, opts)
+	require.NoError(t, err)
+	res := <-ch
+	return res.Error
 }
 
 // registerShards registers n shards concurrently, using the CARv2 mount.

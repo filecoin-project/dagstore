@@ -2,6 +2,7 @@ package mount
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/xerrors"
 
 	"github.com/jpillora/backoff"
 
@@ -28,6 +31,10 @@ var (
 	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt.
 	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests.
 	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up.
+
+	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
+	// for a transient because we do not have enough space in the transients directory.
+	ErrNotEnoughSpaceInTransientsDir = errors.New("not enough space in the transient directory")
 )
 
 // TransientAllocator manages allocations for downloading a transient whose size is not known upfront.
@@ -156,6 +163,13 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		}
 		// TODO add size check.
 	}
+
+	// reset once if the previous fetch errored with a quota reservation error so we can retry.
+	if xerrors.Is(u.onceErr, ErrNotEnoughSpaceInTransientsDir) {
+		u.once = new(sync.Once)
+		u.onceErr = nil
+	}
+
 	// transient appears to be dead, refetch.
 	// get the current sync under the lock, use it to deduplicate concurrent fetches.
 	once := u.once

@@ -70,10 +70,6 @@ var (
 	// ErrShardInUse is returned when the user attempts to destroy a shard that
 	// is in use.
 	ErrShardInUse = errors.New("shard in use")
-
-	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
-	// for a transient because we do not have enough space in the transients directory.
-	ErrNotEnoughSpaceInTransientsDir = errors.New("not enough space in the transient directory")
 )
 
 // DAGStore is the central object of the DAG store.
@@ -110,6 +106,11 @@ type DAGStore struct {
 
 	// Channels not owned by us.
 	//
+	// automatedgcTraceCh is where the Automated GC trace will be sent, if channel is non-nil.
+	automatedgcTraceCh chan *AutomatedGCResult
+
+	// Channels not owned by us.
+	//
 	// traceCh is where traces on shard operations will be sent, if non-nil.
 	traceCh chan<- Trace
 	// failureCh is where shard failures will be notified, if non-nil.
@@ -135,6 +136,7 @@ type DAGStore struct {
 	gcs gc.GarbageCollectionStrategy
 	//
 	// immutable, can be read anywhere without a lock.
+	defaultReservationSize    int64
 	automatedGCEnabled        bool
 	maxTransientDirSize       int64
 	transientsGCWatermarkHigh float64
@@ -181,6 +183,10 @@ type ShardResult struct {
 }
 
 type AutomatedGCConfig struct {
+	// DefaultReservationSize configures the default amount of space to reserve for a transient
+	// when downloading it if the size of the transient is not known upfront.
+	DefaultReservationSize int64
+
 	// GarbeCollectionStrategy specifies the garbage collection strategy we will use
 	// for the automated watermark based GC features. See the documentation of `gc.GarbageCollectionStrategy` for more details.
 	GarbeCollectionStrategy gc.GarbageCollectionStrategy
@@ -195,6 +201,14 @@ type AutomatedGCConfig struct {
 
 	// TransientsGCWatermarkLow: See documentation of `TransientsGCWatermarkHigh` above.
 	TransientsGCWatermarkLow float64
+
+	// AutomatedGCTraceCh is a channel where the caller desires to be notified of every
+	// Automated GC reclaim operation. Publishing to this channel blocks the event loop, so the
+	// caller must ensure the channel is serviced appropriately.
+	//
+	// Note: Not actively consuming from this channel will make the event
+	// loop block.
+	AutomatedGCTraceCh chan *AutomatedGCResult
 }
 
 type Config struct {
@@ -326,11 +340,16 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		dagst.throttleReaadyFetch = throttle.Fixed(max)
 	}
 
+	dagst.defaultReservationSize = int64(defaultReservation)
 	if dagst.automatedGCEnabled {
+		if cfg.AutomatedGCConfig.DefaultReservationSize != 0 {
+			dagst.defaultReservationSize = cfg.AutomatedGCConfig.DefaultReservationSize
+		}
 		dagst.gcs = cfg.AutomatedGCConfig.GarbeCollectionStrategy
 		dagst.maxTransientDirSize = cfg.AutomatedGCConfig.MaxTransientDirSize
 		dagst.transientsGCWatermarkHigh = cfg.AutomatedGCConfig.TransientsGCWatermarkHigh
 		dagst.transientsGCWatermarkLow = cfg.AutomatedGCConfig.TransientsGCWatermarkLow
+		dagst.automatedgcTraceCh = cfg.AutomatedGCConfig.AutomatedGCTraceCh
 	}
 
 	var err error
@@ -457,6 +476,10 @@ type RegisterOpts struct {
 	// has acknowledged the inclusion of the shard, without waiting for any
 	// indexing to happen.
 	LazyInitialization bool
+
+	// ReservationOpts are used to configure the resevation mechanism when downloading
+	// transients whose size is not known upfront when automated GC is enabled.
+	ReservationOpts []mount.ReservationGatedDownloaderOpt
 }
 
 // RegisterShard initiates the registration of a new shard.
@@ -472,7 +495,7 @@ func (d *DAGStore) RegisterShard(ctx context.Context, key shard.Key, mnt mount.M
 	}
 
 	// wrap the original mount in an upgrader.
-	downloader := d.downloader(key, 0)
+	downloader := d.downloader(key, 0, opts.ReservationOpts...)
 	upgraded, err := mount.Upgrade(mnt, d.throttleReaadyFetch, d.config.TransientsDir, key.String(), opts.ExistingTransient, downloader)
 	if err != nil {
 		d.lk.Unlock()
@@ -711,10 +734,10 @@ func (d *DAGStore) transientDirSize() (int64, error) {
 	return size, err
 }
 
-func (d *DAGStore) downloader(key shard.Key, knownTransientSize int64) mount.TransientDownloader {
+func (d *DAGStore) downloader(key shard.Key, knownTransientSize int64, opts ...mount.ReservationGatedDownloaderOpt) mount.TransientDownloader {
 	var downloader mount.TransientDownloader = &mount.SimpleDownloader{}
 	if d.automatedGCEnabled {
-		downloader = mount.NewReservationGatedDownloader(key, knownTransientSize, &transientAllocator{d})
+		downloader = mount.NewReservationGatedDownloader(key, knownTransientSize, &transientAllocator{d}, opts...)
 	}
 	return downloader
 }

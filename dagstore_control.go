@@ -344,11 +344,10 @@ func (d *DAGStore) control() {
 			toReserve := tsk.reservationReq.want
 			reservationSizeUnknown := toReserve == 0
 
-			// increase the space allocated exponentially as more reservations are requested for a shard whose
+			// increase the space allocated linearly as more reservations are requested for a shard whose
 			// transient size is unknown upfront.
 			if reservationSizeUnknown {
-				factor := int64(1 << tsk.reservationReq.nPrevReservations)
-				toReserve = factor * int64(defaultReservation)
+				toReserve = (tsk.reservationReq.nPrevReservations + 1) * d.defaultReservationSize
 			}
 
 			mkReservation := func() {
@@ -372,7 +371,7 @@ func (d *DAGStore) control() {
 
 			// we weren't able to make space for the reservation request even after a GC attempt.
 			// fail the reservation request.
-			tsk.reservationReq.response <- &reservationResp{err: ErrNotEnoughSpaceInTransientsDir}
+			tsk.reservationReq.response <- &reservationResp{err: mount.ErrNotEnoughSpaceInTransientsDir}
 
 		case OpShardReleaseTransientReservation:
 			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {

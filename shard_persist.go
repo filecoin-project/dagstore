@@ -57,11 +57,11 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &ps); err != nil {
 		return err
 	}
-
 	// restore basics.
 	s.key = shard.KeyFromString(ps.Key)
 	s.state = ps.State
 	s.lazy = ps.Lazy
+	s.transientSize = ps.TransientSize
 	if ps.Error != "" {
 		s.err = errors.New(ps.Error)
 	}
