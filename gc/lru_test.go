@@ -38,4 +38,10 @@ func TestLRUGarbageCollector(t *testing.T) {
 
 	lru.NotifyRemoved(sk2)
 	require.Equal(t, []shard.Key{sk1, sk3}, lru.Reclaimable())
+
+	lru.NotifyReclaimed([]shard.Key{sk1})
+	require.Equal(t, []shard.Key{sk3}, lru.Reclaimable())
+
+	lru.NotifyReclaimed([]shard.Key{sk1, sk3})
+	require.Equal(t, []shard.Key{}, lru.Reclaimable())
 }

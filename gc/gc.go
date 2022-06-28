@@ -10,9 +10,8 @@ import "github.com/filecoin-project/dagstore/shard"
 // Note: The `GarbageCollectionStrategy` is only responsible for deciding the order in which reclaimable transients
 // should be GC'd. The actual Garbage Collection is done by the dagstore which "owns" the transients.
 //
-// Implementations of `GarbageCollectionStrategy` are not meant to be thread safe and the dagstore provides thread safety here
-// by only invoking the `GarbageCollectionStrategy` from the dagstore event loop.
-// All methods of the `GarbageCollectionStrategy` should and will only be invoked from the dagstore's event loop.
+// Implementations of `GarbageCollectionStrategy` are not meant to be thread safe and the dagstore should only
+// invoke the `GarbageCollectionStrategy` methods from the event loop.
 type GarbageCollectionStrategy interface {
 	// NotifyAccessed notifies the strategy when the shard with the given key is accessed for a read operation.
 	NotifyAccessed(shard.Key)
@@ -23,11 +22,11 @@ type GarbageCollectionStrategy interface {
 	// NotifyRemoved notifies the strategy that the shard with the given key has been removed by the dagstore.
 	NotifyRemoved(shard.Key)
 	// NotifyReclaimed notifies the strategy that the shards with the given key have been reclaimed by the dagstore.
-	// The dagstore will ideally call `Reclaimable` -> get an ordered list of shards that be GC'd and then call `NotifyReclaimed`
-	// on the `GarbageCollectionStrategy` for all the shards that were actually GC'd/reclaimed.
+	// The dagstore will ideally call `Reclaimable` -> get an ordered list of shards that can be GC'd and then call `NotifyReclaimed`
+	// on the `GarbageCollectionStrategy` for all shards that were actually GC'd/reclaimed.
 	NotifyReclaimed([]shard.Key)
 	// Reclaimable is called by the dagstore when it wants an ordered list of shards whose transients can
-	// be reclaimed by GC. The shards are ordered from ins descending order of their eligiblity for GC.
+	// be reclaimed by GC. The shards are ordered in descending order of their eligibility for GC.
 	Reclaimable() []shard.Key
 }
 

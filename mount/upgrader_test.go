@@ -24,6 +24,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var (
+	mockDefaultReservation = int64(1000)
+)
+
 func TestUpgrade(t *testing.T) {
 	tcs := map[string]struct {
 		setup     func(t *testing.T, key string, rootDir string)
@@ -117,7 +121,7 @@ func TestUpgrade(t *testing.T) {
 
 			mnt := tcc.createMnt(t, key, rootDir)
 
-			downloader := NewReservationGatedDownloader(shard.KeyFromString(key), 0, &simplMockTransientManager{})
+			downloader := NewReservationGatedDownloader(shard.KeyFromString(key), 0, newMockTransientAllocator())
 			u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, tcc.initial, downloader)
 			require.NoError(t, err)
 			require.NotNil(t, u)
@@ -144,85 +148,162 @@ func TestUpgrade(t *testing.T) {
 	}
 }
 
+type zeroSizedMount struct {
+	*Counting
+}
+
+func (z *zeroSizedMount) Stat(ctx context.Context) (Stat, error) {
+	st, err := z.Counting.Stat(ctx)
+	st.Size = 0
+	return st, err
+}
+
 func TestUpgraderDeduplicatesRemote(t *testing.T) {
-	ctx := context.Background()
-	mnt := &Counting{Mount: &FSMount{testdata.FS, testdata.FSPathCarV2}}
+	tcs := map[string]struct {
+		mkUpgrader         func(t *testing.T, key string, rootDir string, c *Counting, mockTransientAllocator *mockTransientAllocator) *Upgrader
+		verifyReservations func(t *testing.T, m *mockTransientAllocator, actualTransientSize int64)
+	}{
+		"reservations are disabled": {
+			mkUpgrader: func(t *testing.T, key string, rootDir string, c *Counting, _ *mockTransientAllocator) *Upgrader {
+				u, err := Upgrade(c, throttle.Noop(), rootDir, key, "", &SimpleDownloader{})
+				require.NoError(t, err)
+				return u
+			},
+		},
+		"transient size is known upfront and reservations are enabled": {
+			mkUpgrader: func(t *testing.T, key string, rootDir string, c *Counting, m *mockTransientAllocator) *Upgrader {
+				downloader := NewReservationGatedDownloader(shard.KeyFromString(key), 0, m)
 
-	key := fmt.Sprintf("%d", rand.Uint64())
-	rootDir := t.TempDir()
-	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", &SimpleDownloader{})
-	require.NoError(t, err)
-	require.Zero(t, mnt.Count())
+				u, err := Upgrade(c, throttle.Noop(), rootDir, key, "", downloader)
+				require.NoError(t, err)
+				return u
+			},
+			verifyReservations: func(t *testing.T, m *mockTransientAllocator, actualTransientSize int64) {
+				// there should be two reservations as file is fetched twice and no releases
+				fmt.Println(m.reservations)
+				require.Len(t, m.reservations, 2)
+				require.EqualValues(t, actualTransientSize, m.reservations[0])
+				require.EqualValues(t, actualTransientSize, m.reservations[1])
+				require.Empty(t, m.releases)
+			},
+		},
+		"transient size is not known upfront and reservations are enabled": {
+			mkUpgrader: func(t *testing.T, key string, rootDir string, c *Counting, m *mockTransientAllocator) *Upgrader {
+				mnt := &zeroSizedMount{c}
 
-	// now fetch in parallel
-	cnt := 20
-	readers := make([]Reader, cnt)
-	grp, _ := errgroup.WithContext(context.Background())
-	for i := 0; i < cnt; i++ {
-		i := i
-		grp.Go(func() error {
+				downloader := NewReservationGatedDownloader(shard.KeyFromString(key), 0, m)
+
+				u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", downloader)
+				require.NoError(t, err)
+				return u
+			},
+			verifyReservations: func(t *testing.T, m *mockTransientAllocator, actualTransientSize int64) {
+				nReservationsForOneFetch := (actualTransientSize / mockDefaultReservation) + int64(1)
+				require.Len(t, m.reservations, 2*int(nReservationsForOneFetch))
+				fmt.Println(m.reservations)
+				residue := actualTransientSize % mockDefaultReservation
+
+				for i := range m.reservations {
+					require.EqualValues(t, mockDefaultReservation, m.reservations[i])
+				}
+
+				require.Len(t, m.releases, 2)
+				require.EqualValues(t, mockDefaultReservation-residue, m.releases[0])
+				require.EqualValues(t, mockDefaultReservation-residue, m.releases[1])
+			},
+		},
+	}
+
+	for name, tc := range tcs {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			rootDir := t.TempDir()
+			mnt := &Counting{Mount: &FSMount{testdata.FS, testdata.FSPathCarV2}}
+			key := fmt.Sprintf("%d", rand.Uint64())
+			st, err := mnt.Stat(ctx)
+			require.NoError(t, err)
+			actualTransientSize := st.Size
+
+			ma := newMockTransientAllocator()
+			u := tc.mkUpgrader(t, key, rootDir, mnt, ma)
+			require.Zero(t, mnt.Count())
+
+			// now fetch in parallel
+			cnt := 20
+			readers := make([]Reader, cnt)
+			grp, _ := errgroup.WithContext(context.Background())
+			for i := 0; i < cnt; i++ {
+				i := i
+				grp.Go(func() error {
+					rd, err := u.Fetch(ctx)
+					if err != nil {
+						return err
+					}
+					readers[i] = rd
+					return nil
+				})
+			}
+			require.NoError(t, grp.Wait())
+			// file should have been fetched only once
+			require.EqualValues(t, 1, mnt.Count())
+			// ensure transient exists
+			_, err = os.Stat(u.TransientPath())
+			require.NoError(t, err)
+
+			carF, err := os.Open("../" + testdata.RootPathCarV2)
+			require.NoError(t, err)
+			carBytes, err := ioutil.ReadAll(carF)
+			require.NoError(t, err)
+			require.NoError(t, carF.Close())
+
+			grp2, _ := errgroup.WithContext(context.Background())
+			for _, rd := range readers {
+				rdc := rd
+				grp2.Go(func() error {
+					bz, err := ioutil.ReadAll(rdc)
+					if err != nil {
+						return err
+					}
+					if err := rdc.Close(); err != nil {
+						return err
+					}
+
+					if !bytes.Equal(carBytes, bz) {
+						return errors.New("contents do not match")
+					}
+					return nil
+				})
+			}
+			require.NoError(t, grp2.Wait())
+
+			// file should have been fetched only once
+			require.EqualValues(t, 1, mnt.Count())
+
+			// check transient still exists
+			_, err = os.Stat(u.TransientPath())
+			require.NoError(t, err)
+
+			// delete the transient
+			err = os.Remove(u.TransientPath())
+			require.NoError(t, err)
+
+			// fetch again and file should have been fetched twice
 			rd, err := u.Fetch(ctx)
-			if err != nil {
-				return err
+			require.NoError(t, err)
+			require.EqualValues(t, 2, mnt.Count())
+			_, err = os.Stat(u.TransientPath())
+			require.NoError(t, err)
+
+			require.NoError(t, rd.Close())
+			_, err = os.Stat(u.TransientPath())
+			require.NoError(t, err)
+
+			// verify reservations and releases
+			if tc.verifyReservations != nil {
+				tc.verifyReservations(t, ma, actualTransientSize)
 			}
-			readers[i] = rd
-			return nil
 		})
 	}
-	require.NoError(t, grp.Wait())
-	// file should have been fetched only once
-	require.EqualValues(t, 1, mnt.Count())
-	// ensure transient exists
-	_, err = os.Stat(u.TransientPath())
-	require.NoError(t, err)
-
-	carF, err := os.Open("../" + testdata.RootPathCarV2)
-	require.NoError(t, err)
-	carBytes, err := ioutil.ReadAll(carF)
-	require.NoError(t, err)
-	require.NoError(t, carF.Close())
-
-	grp2, _ := errgroup.WithContext(context.Background())
-	for _, rd := range readers {
-		rdc := rd
-		grp2.Go(func() error {
-			bz, err := ioutil.ReadAll(rdc)
-			if err != nil {
-				return err
-			}
-			if err := rdc.Close(); err != nil {
-				return err
-			}
-
-			if !bytes.Equal(carBytes, bz) {
-				return errors.New("contents do not match")
-			}
-			return nil
-		})
-	}
-	require.NoError(t, grp2.Wait())
-
-	// file should have been fetched only once
-	require.EqualValues(t, 1, mnt.Count())
-
-	// check transient still exists
-	_, err = os.Stat(u.TransientPath())
-	require.NoError(t, err)
-
-	// delete the transient
-	err = os.Remove(u.TransientPath())
-	require.NoError(t, err)
-
-	// fetch again and file should have been fetched twice
-	rd, err := u.Fetch(ctx)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, mnt.Count())
-	_, err = os.Stat(u.TransientPath())
-	require.NoError(t, err)
-
-	require.NoError(t, rd.Close())
-	_, err = os.Stat(u.TransientPath())
-	require.NoError(t, err)
 }
 
 func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
@@ -252,7 +333,7 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 			underlyings := make([]*blockingReaderMount, 100)
 			for i := range upgraders {
 				underlyings[i] = &blockingReaderMount{isReady: tc.ready, br: &blockingReader{r: io.LimitReader(rand2.Reader, 1)}}
-				downloader := NewReservationGatedDownloader(shard.KeyFromString("foo"), 0, &simplMockTransientManager{})
+				downloader := NewReservationGatedDownloader(shard.KeyFromString("foo"), 0, newMockTransientAllocator())
 				u, err := Upgrade(underlyings[i], thrt, t.TempDir(), "foo", "", downloader)
 				require.NoError(t, err)
 				upgraders[i] = u
@@ -367,16 +448,26 @@ func (b *blockingReaderMount) Deserialize(url *url.URL) error {
 	panic("implement me")
 }
 
-type simplMockTransientManager struct{}
+type mockTransientAllocator struct {
+	reservations []int64
+	releases     []int64
+}
 
-func (s *simplMockTransientManager) Reserve(ctx context.Context, k shard.Key, count int64, n int64) (reserved int64, err error) {
+func newMockTransientAllocator() *mockTransientAllocator {
+	return &mockTransientAllocator{}
+}
+
+func (m *mockTransientAllocator) Reserve(ctx context.Context, k shard.Key, count int64, n int64) (reserved int64, err error) {
 	if n != 0 {
+		m.reservations = append(m.reservations, n)
 		return n, nil
 	} else {
-		return 10000, nil
+		m.reservations = append(m.reservations, mockDefaultReservation)
+		return mockDefaultReservation, nil
 	}
 }
 
-func (s *simplMockTransientManager) Release(ctx context.Context, k shard.Key, n int64) error {
+func (m *mockTransientAllocator) Release(ctx context.Context, k shard.Key, n int64) error {
+	m.releases = append(m.releases, n)
 	return nil
 }
