@@ -464,29 +464,28 @@ func TestRestartResumesRegistration(t *testing.T) {
 
 	// this time we will receive three traces; OpShardRegister, OpShardInitialize, OpShardReserveTransient AND OpShardMakeAvailable.
 	n, timedOut = sink.Read(traces, 3*time.Second)
-	fmt.Println(traces)
 	require.Equal(t, 4, n)
 	require.True(t, timedOut)
 
 	// trace 1.
 	require.Equal(t, OpShardRegister, traces[0].Op)
 	require.Equal(t, ShardStateNew, traces[0].After.ShardState)
-	require.EqualValues(t, 0, traces[0].TransientDirSize)
+	require.EqualValues(t, 0, traces[0].TransientDirSizeCounter)
 
 	// trace 2.
 	require.Equal(t, OpShardInitialize, traces[1].Op)
 	require.Equal(t, ShardStateInitializing, traces[1].After.ShardState)
-	require.EqualValues(t, 0, traces[1].TransientDirSize)
+	require.EqualValues(t, 0, traces[1].TransientDirSizeCounter)
 
 	// trace 3
 	require.Equal(t, OpShardReserveTransient, traces[2].Op)
 	require.Equal(t, ShardStateInitializing, traces[2].After.ShardState)
-	require.EqualValues(t, st.Size, traces[2].TransientDirSize)
+	require.EqualValues(t, st.Size, traces[2].TransientDirSizeCounter)
 
 	// trace 4.
 	require.Equal(t, OpShardMakeAvailable, traces[3].Op)
 	require.Equal(t, ShardStateAvailable, traces[3].After.ShardState)
-	require.EqualValues(t, st.Size, traces[3].TransientDirSize)
+	require.EqualValues(t, st.Size, traces[3].TransientDirSizeCounter)
 	sz, err := dagst.transientDirSize()
 	require.NoError(t, err)
 	require.EqualValues(t, st.Size, sz)
@@ -803,7 +802,7 @@ func TestIndexingFailure(t *testing.T) {
 		case OpShardReserveTransient:
 			require.EqualValues(t, ShardStateInitializing, evt.After.ShardState)
 			require.NoError(t, evt.After.Error)
-			require.EqualValues(t, reserveCount*st.Size, evt.TransientDirSize)
+			require.EqualValues(t, reserveCount*st.Size, evt.TransientDirSizeCounter)
 			reserveCount++
 		case OpShardFail:
 			require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
@@ -885,9 +884,9 @@ func TestIndexingFailure(t *testing.T) {
 		}
 
 		// after the first call to recover, we'd have free the space taken up by one of the transients
-		require.EqualValues(t, st.Size*15, evts[0].TransientDirSize)
+		require.EqualValues(t, st.Size*15, evts[0].TransientDirSizeCounter)
 		// because we would have made reservations again for each shard, we'd be using the same amount of transient space.
-		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSize)
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
 		sz, err := dagst.transientDirSize()
 		require.NoError(t, err)
 		require.EqualValues(t, st.Size*16, sz)
@@ -968,9 +967,9 @@ func TestIndexingFailure(t *testing.T) {
 			}
 		}
 		// after the first call to recover, we'd have free the space taken up by one of the transients
-		require.EqualValues(t, prevSize*15, evts[0].TransientDirSize)
+		require.EqualValues(t, prevSize*15, evts[0].TransientDirSizeCounter)
 		// because we would have made reservations again for each shard, we'd be using the same amount of transient space.
-		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSize)
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
 		sz, err := dagst.transientDirSize()
 		require.NoError(t, err)
 		require.EqualValues(t, st.Size*16, sz)
@@ -1039,7 +1038,7 @@ func TestFailureRecovery(t *testing.T) {
 	require.Equal(t, counts[OpShardRecover], 160)
 	require.Equal(t, counts[OpShardReserveTransient], 176)
 
-	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSize)
+	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
 	sz, err := dagst.transientDirSize()
 	require.NoError(t, err)
 	require.EqualValues(t, st.Size*16, sz)
@@ -1100,7 +1099,7 @@ func TestRecoveryOnStart(t *testing.T) {
 	require.Equal(t, counts[OpShardFail], 16)
 	require.Equal(t, counts[OpShardReserveTransient], 16)
 
-	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSize)
+	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
 	sz, err := dagst.transientDirSize()
 	require.NoError(t, err)
 	require.EqualValues(t, st.Size*16, sz)
@@ -1153,7 +1152,7 @@ func TestRecoveryOnStart(t *testing.T) {
 		require.Equal(t, counts[OpShardFail], 16)
 		require.Equal(t, counts[OpShardReserveTransient], 16)
 
-		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSize)
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
 		sz, err := dagst.transientDirSize()
 		require.NoError(t, err)
 		require.EqualValues(t, st.Size*16, sz)

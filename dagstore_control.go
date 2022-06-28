@@ -405,7 +405,7 @@ func (d *DAGStore) control() {
 					Error:      s.err,
 					refs:       s.refs,
 				},
-				TransientDirSize: d.totalTransientDirSize,
+				TransientDirSizeCounter: d.totalTransientDirSize,
 			}
 			d.traceCh <- n
 			log.Debugw("finished writing trace to the trace channel", "shard", s.key)

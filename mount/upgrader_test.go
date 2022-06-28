@@ -180,7 +180,6 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 			},
 			verifyReservations: func(t *testing.T, m *mockTransientAllocator, actualTransientSize int64) {
 				// there should be two reservations as file is fetched twice and no releases
-				fmt.Println(m.reservations)
 				require.Len(t, m.reservations, 2)
 				require.EqualValues(t, actualTransientSize, m.reservations[0])
 				require.EqualValues(t, actualTransientSize, m.reservations[1])
@@ -200,7 +199,6 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 			verifyReservations: func(t *testing.T, m *mockTransientAllocator, actualTransientSize int64) {
 				nReservationsForOneFetch := (actualTransientSize / mockDefaultReservation) + int64(1)
 				require.Len(t, m.reservations, 2*int(nReservationsForOneFetch))
-				fmt.Println(m.reservations)
 				residue := actualTransientSize % mockDefaultReservation
 
 				for i := range m.reservations {
@@ -302,6 +300,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 			if tc.verifyReservations != nil {
 				tc.verifyReservations(t, ma, actualTransientSize)
 			}
+			require.EqualValues(t, actualTransientSize, u.transientSize)
 		})
 	}
 }

@@ -591,10 +591,10 @@ func (d *DAGStore) RecoverShard(ctx context.Context, key shard.Key, out chan Sha
 }
 
 type Trace struct {
-	Key              shard.Key
-	Op               OpType
-	After            ShardInfo
-	TransientDirSize int64
+	Key                     shard.Key
+	Op                      OpType
+	After                   ShardInfo
+	TransientDirSizeCounter int64
 }
 
 type ShardInfo struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -272,7 +273,6 @@ func TestShardSizeIsMemoized(t *testing.T) {
 	ctx := context.Background()
 	st, err := carv2mnt.Stat(ctx)
 	require.NoError(t, err)
-	fmt.Println("\n Mount size is", st.Size)
 
 	// only has space for 10 transients.
 	maxTransientSize := (st.Size * 10) + 20
@@ -284,10 +284,11 @@ func TestShardSizeIsMemoized(t *testing.T) {
 	require.NoError(t, err)
 
 	store := dssync.MutexWrap(datastore.NewMapDatastore())
+	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
 		MaxConcurrentReadyFetches: 5,
 		MountRegistry:             r,
-		TransientsDir:             t.TempDir(),
+		TransientsDir:             dir,
 		Datastore:                 store,
 		AutomatedGCEnabled:        true,
 		AutomatedGCConfig: &AutomatedGCConfig{
@@ -330,20 +331,46 @@ func TestShardSizeIsMemoized(t *testing.T) {
 	close(doneCh)
 	require.NoError(t, <-errorCh)
 
+	// remove all existing transients
+	require.NoError(t, os.RemoveAll(dir))
 	// we know the size even after a restart
-	dagst, err = NewDAGStore(Config{
-		MountRegistry: r,
-		TransientsDir: t.TempDir(),
-		Datastore:     store,
+	sink := tracer(128)
+	dagst2, err := NewDAGStore(Config{
+		IndexRepo:          dagst.indices,
+		MountRegistry:      r,
+		TransientsDir:      t.TempDir(),
+		Datastore:          store,
+		TraceCh:            sink,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			DefaultReservationSize:    st.Size / 3,
+			MaxTransientDirSize:       maxTransientSize,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+			AutomatedGCTraceCh:        automatedgcCh,
+		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, dagst.Start(context.Background()))
+	require.NoError(t, dagst2.Start(context.Background()))
 
 	for _, k := range keys {
-		si, err := dagst.GetShardInfo(k)
+		si, err := dagst2.GetShardInfo(k)
 		require.NoError(t, err)
 		require.EqualValues(t, st.Size, si.TransientSize)
 	}
+
+	// try downloading the transient now -> there should be only one reservation of the known size
+	acquireShard(t, dagst2, keys[0], 1)
+
+	traces := make([]Trace, 2)
+	n, timedOut := sink.Read(traces, 3*time.Second)
+	require.Equal(t, 2, n)
+	require.False(t, timedOut)
+	require.EqualValues(t, OpShardAcquire, traces[0].Op)
+	require.EqualValues(t, OpShardReserveTransient, traces[1].Op)
+	require.EqualValues(t, st.Size, traces[1].TransientDirSizeCounter)
+
 }
 
 func assertEvicted(t *testing.T, key shard.Key, before int64, after int64, ch chan *AutomatedGCResult) {
