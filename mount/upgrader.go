@@ -28,9 +28,9 @@ var (
 
 	// 5s, 7s, 11s, 16s, 25s, 38s, 1m
 	minReservationBackOff  = 5 * time.Second // minimum backoff time before making a new reservation attempt
-	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt.
-	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests.
-	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up.
+	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt
+	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests
+	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up
 
 	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
 	// for a transient because we do not have enough space in the transients directory.
@@ -58,7 +58,7 @@ type TransientAllocator interface {
 // TransientDownloader manages the process of downloading a transient locally from a Mount
 // when we are upgrading a Mount that does NOT have random access capabilities.
 type TransientDownloader interface {
-	// Download downloads the transient from the remote Mount to the given output path.
+	// Download copies the transient from the given underlying Mount to the given output path.
 	Download(ctx context.Context, underlying Mount, outpath string) error
 }
 
@@ -343,9 +343,8 @@ func (u *Upgrader) DeleteTransient() (release int64, err error) {
 	return size, err
 }
 
-// SimpleDownloader simply downloads the transient locally from the mount
-// by copying the mount reader to the given output path. It does not make
-// any reservation requests when downloading the transient.
+// SimpleDownloader simply copies the transient to a given output path from the given underlying mount.
+// It does not make any reservation requests when downloading the transient.
 // Use this when automated GC is disabled.
 type SimpleDownloader struct{}
 
@@ -492,7 +491,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 			}
 
 			// if we know the size of the transient upfront and we've already read as many bytes,
-			// short-circuit and return here instead if doing one more round to see an EOF.
+			// short-circuit and return here instead of doing one more round to see an EOF.
 			fi, err := dst.Stat()
 			if err != nil {
 				return fmt.Errorf("failed to stat output file: %w", err)
@@ -541,7 +540,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 // downloadNBytes copies and writes at most `n` bytes from the given reader to the given output file.
 // It returns true if there are still more bytes to be read from the reader and false otherwise.
 // It will return true if and only if err == nil.
-// If it returns false and err == nil it means that we've successfully exhausted the reader.
+// If it returns false and err == nil,	 it means that we've successfully exhausted the reader.
 func downloadNBytes(ctx context.Context, rd Reader, n int64, out *os.File) (hasMore bool, err error) {
 	remaining := n
 	buf := make([]byte, readBufferSize)
