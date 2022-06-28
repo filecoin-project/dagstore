@@ -344,7 +344,7 @@ func TestShardSizeIsMemoized(t *testing.T) {
 		AutomatedGCEnabled: true,
 		AutomatedGCConfig: &AutomatedGCConfig{
 			DefaultReservationSize:    st.Size / 3,
-			MaxTransientDirSize:       maxTransientSize,
+			MaxTransientDirSize:       st.Size,
 			TransientsGCWatermarkHigh: 1.0,
 			TransientsGCWatermarkLow:  0.5,
 			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
@@ -371,6 +371,12 @@ func TestShardSizeIsMemoized(t *testing.T) {
 	require.EqualValues(t, OpShardReserveTransient, traces[1].Op)
 	require.EqualValues(t, st.Size, traces[1].TransientDirSizeCounter)
 
+	// try registering a shard -> fails as space already taken up by acquired shard
+	require.Contains(t, registerShardSync(t, dagst2, shard.KeyFromString("test"), carv2mnt, RegisterOpts{
+		ReservationOpts: []mount.ReservationGatedDownloaderOpt{
+			mount.ReservationBackOffRetryOpt(100*time.Millisecond, 300*time.Millisecond, 2, 3),
+		},
+	}).Error(), "not enough space")
 }
 
 func assertEvicted(t *testing.T, key shard.Key, before int64, after int64, ch chan *AutomatedGCResult) {
