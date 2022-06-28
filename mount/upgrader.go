@@ -38,20 +38,20 @@ var (
 )
 
 // TransientAllocator manages allocations for downloading a transient whose size is not known upfront.
-// It reserves space for the transient with the allocator when the transient is  being downloaded and releases unused reservations
+// It reserves space for the transient with the allocator when the transient is being downloaded and releases unused reservations
 // back to the allocator after the transient download finishes or errors out.
 type TransientAllocator interface {
 	// Reserve attempts to reserve `toReserve` bytes for the transient and returns the number
 	// of bytes actually reserved or any error encountered when trying to make the reservation.
 	// The `nPrevReservations` param denotes the number of previous successful reservations
-	// the caller has had for an ongoing download.
+	// the caller has made for an ongoing download.
 	// Note: reserved != 0 if and only if err == nil.
 	Reserve(ctx context.Context, k shard.Key, nPrevReservations int64, toReserve int64) (reserved int64, err error)
 
 	// Release releases back `toRelease` bytes to the allocator.
 	// The bytes that are released here are the ones that were previously obtained by making a `Reserve` call to the allocator
 	// but were not used either because the transient download errored out or because the size of the downloaded transient
-	// was less than the number of bytes reserved.
+	// was less than the number of bytes actually reserved.
 	Release(ctx context.Context, k shard.Key, toRelease int64) error
 }
 
