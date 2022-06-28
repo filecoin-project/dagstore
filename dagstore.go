@@ -63,8 +63,8 @@ var (
 	// ErrShardInitializationFailed is returned when shard initialization fails.
 	ErrShardInitializationFailed = errors.New("shard initialization failed")
 
-	// ErrShardIllegalReservationRequest is returned when we get a shard reservation request when the state is in
-	// a state where no reservation requests should be made for it.
+	// ErrShardIllegalReservationRequest is returned when we get a reservation request for a shard
+	// that is not in a valid state for reservation requests.
 	ErrShardIllegalReservationRequest = errors.New("illegal shard reservation request")
 
 	// ErrShardInUse is returned when the user attempts to destroy a shard that
@@ -129,7 +129,7 @@ type DAGStore struct {
 
 	// Automated GC state
 	//---
-	// size of the transient directory; guarded by the event loop/
+	// counter tracking the size of the transient directory along with reservations; guarded by the event loop
 	totalTransientDirSize int64
 	//
 	// The garbage collector strategy we are using; calls to this should only be made from the event loop
@@ -188,7 +188,7 @@ type AutomatedGCConfig struct {
 	DefaultReservationSize int64
 
 	// GarbeCollectionStrategy specifies the garbage collection strategy we will use
-	// for the automated watermark based GC features. See the documentation of `gc.GarbageCollectionStrategy` for more details.
+	// for the automated watermark based GC feature. See the documentation of `gc.GarbageCollectionStrategy` for more details.
 	GarbeCollectionStrategy gc.GarbageCollectionStrategy
 
 	// MaxTransientDirSize specifies the maximum allowable size of the transients directory.
