@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -36,6 +37,10 @@ var (
 	// for a transient because we do not have enough space in the transients directory.
 	ErrNotEnoughSpaceInTransientsDir = errors.New("not enough space in the transient directory")
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 // TransientAllocator manages allocations for downloading a transient whose size is not known upfront.
 // It reserves space for the transient with the allocator when the transient is being downloaded and releases unused reservations
@@ -456,6 +461,14 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 			}
 			nAttempts := backoff.Attempt() + 1
 			if nAttempts >= r.maxReservationAttempts {
+				return reserved, err
+			}
+
+			// fail with a fifty percent probability after two attempts to prevent
+			// downloads who have reserved memory but waiting for more from blocking each other.
+			// Note: This is a rare edge case given that we throttle concurrent fetches and allocate
+			// more memory to older downloads than new ones but still best to handle it.
+			if rn := rand.Float32(); rn <= 0.5 && nAttempts > 2 {
 				return reserved, err
 			}
 

@@ -374,7 +374,7 @@ func dagstoreWithGC(t *testing.T, r *mount.Registry, maxTransientSize int64,
 	store := dssync.MutexWrap(datastore.NewMapDatastore())
 
 	dagst, err := NewDAGStore(Config{
-		MaxConcurrentReadyFetches: 3,
+		MaxConcurrentReadyFetches: 5,
 		MountRegistry:             r,
 		TransientsDir:             t.TempDir(),
 		Datastore:                 store,
