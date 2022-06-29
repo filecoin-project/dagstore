@@ -107,7 +107,7 @@ type DAGStore struct {
 	// Channels not owned by us.
 	//
 	// automatedgcTraceCh is where the Automated GC trace will be sent, if channel is non-nil.
-	automatedgcTraceCh chan *AutomatedGCResult
+	automatedgcTraceCh chan AutomatedGCResult
 
 	// Channels not owned by us.
 	//
@@ -208,7 +208,7 @@ type AutomatedGCConfig struct {
 	//
 	// Note: Not actively consuming from this channel will make the event
 	// loop block.
-	AutomatedGCTraceCh chan *AutomatedGCResult
+	AutomatedGCTraceCh chan AutomatedGCResult
 }
 
 type Config struct {
@@ -283,11 +283,8 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	if cfg.AutomatedGCEnabled {
-		if cfg.AutomatedGCConfig == nil {
-			return nil, errors.New("automated GC config cannot be empty since automated GC has been enabled")
-		}
-		if cfg.AutomatedGCConfig.GarbeCollectionStrategy == nil {
-			return nil, errors.New("garbage collection strategy should not be nil when automated GC is enabled")
+		if err := validateAutomatedGCConfig(cfg.AutomatedGCConfig); err != nil {
+			return nil, err
 		}
 	}
 
@@ -345,11 +342,17 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		if cfg.AutomatedGCConfig.DefaultReservationSize != 0 {
 			dagst.defaultReservationSize = cfg.AutomatedGCConfig.DefaultReservationSize
 		}
+
 		dagst.gcs = cfg.AutomatedGCConfig.GarbeCollectionStrategy
 		dagst.maxTransientDirSize = cfg.AutomatedGCConfig.MaxTransientDirSize
 		dagst.transientsGCWatermarkHigh = cfg.AutomatedGCConfig.TransientsGCWatermarkHigh
 		dagst.transientsGCWatermarkLow = cfg.AutomatedGCConfig.TransientsGCWatermarkLow
 		dagst.automatedgcTraceCh = cfg.AutomatedGCConfig.AutomatedGCTraceCh
+
+		// default reservation size should not exceed the maximum transient directory su
+		if dagst.maxTransientDirSize <= dagst.defaultReservationSize {
+			dagst.defaultReservationSize = dagst.maxTransientDirSize / 10
+		}
 	}
 
 	var err error
@@ -359,6 +362,30 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 	}
 
 	return dagst, nil
+}
+
+func validateAutomatedGCConfig(cfg *AutomatedGCConfig) error {
+	if cfg == nil {
+		return errors.New("automated GC config cannot be empty since automated GC has been enabled")
+	}
+
+	if cfg.GarbeCollectionStrategy == nil {
+		return errors.New("garbage collection strategy should not be nil when automated GC is enabled")
+	}
+
+	if cfg.TransientsGCWatermarkLow == 0 || cfg.TransientsGCWatermarkHigh == 0 {
+		return errors.New("high or low watermark cannot be zero")
+	}
+
+	if cfg.TransientsGCWatermarkHigh <= cfg.TransientsGCWatermarkLow {
+		return errors.New("high water mark should be greater than low watermark")
+	}
+
+	if cfg.MaxTransientDirSize == 0 {
+		return errors.New("max transient directory size should not be zero")
+	}
+
+	return nil
 }
 
 // Start starts a DAG store.

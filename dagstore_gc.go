@@ -93,12 +93,12 @@ func (d *DAGStore) gcUptoTarget(target float64) {
 		d.totalTransientDirSize -= freed
 		reclaimed = append(reclaimed, sk)
 
-		if d.automatedgcTraceCh != nil {
+		if freed != 0 && d.automatedgcTraceCh != nil {
 			afterReclaimDiskSize, err := d.transientDirSize()
 			if err != nil {
 				log.Errorw("failed to fetch transient dir size", "error", err)
 			}
-			result := &AutomatedGCResult{
+			result := AutomatedGCResult{
 				TransientsAccountingBeforeReclaim: before,
 				TransientsAccountingAfterReclaim:  d.totalTransientDirSize,
 				TransientsDirSizeBeforeReclaim:    beforeReclaimDiskSize,

@@ -1483,11 +1483,12 @@ func registerShardSync(t *testing.T, dagst *DAGStore, key shard.Key, mnt mount.M
 	return res.Error
 }
 
-// registerShards registers n shards concurrently, using the CARv2 mount.
-func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
+func registerShardsWithKeyPrefix(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, prefix string,
+	nExpectedShards int, opts RegisterOpts) (ret []shard.Key) {
+
 	grp, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < n; i++ {
-		k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
+		k := shard.KeyFromString(fmt.Sprintf("%sshard-%d", prefix, i))
 		grp.Go(func() error {
 			ch := make(chan ShardResult, 1)
 			err := dagst.RegisterShard(context.Background(), k, mnt, ch, opts)
@@ -1502,9 +1503,9 @@ func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts 
 
 	require.NoError(t, grp.Wait())
 
-	info := dagst.AllShardsInfo()
-	require.Len(t, info, n)
-	for k, ss := range info {
+	for _, k := range ret {
+		ss, err := dagst.GetShardInfo(k)
+		require.NoError(t, err)
 		if opts.LazyInitialization {
 			require.Equal(t, ShardStateNew, ss.ShardState)
 			require.NoError(t, ss.Error)
@@ -1519,6 +1520,11 @@ func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts 
 	}
 
 	return ret
+}
+
+// registerShards registers n shards concurrently, using the CARv2 mount.
+func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
+	return registerShardsWithKeyPrefix(t, dagst, n, mnt, "", n, opts)
 }
 
 // acquireShard acquires the shard known by key `k` concurrently `n` times.
