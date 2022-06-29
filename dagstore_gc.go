@@ -45,6 +45,19 @@ func (e *GCResult) ShardFailures() int {
 	return failures
 }
 
+func (d *DAGStore) automatedGCIfNeeded() {
+	if d.automatedGCEnabled {
+		maxTransientDirSize := d.maxTransientDirSize
+		transientsGCWatermarkHigh := d.transientsGCWatermarkHigh
+		transientsGCWatermarkLow := d.transientsGCWatermarkLow
+
+		if float64(d.totalTransientDirSize) >= float64(maxTransientDirSize)*transientsGCWatermarkHigh {
+			target := float64(maxTransientDirSize) * transientsGCWatermarkLow
+			d.gcUptoTarget(target)
+		}
+	}
+}
+
 // gcUptoTarget GC's transients till the size of the transients directory
 // goes below the given target. It relies on the configured Garbage Collector to return a list of shards
 // whose transients can be GC'd prioritized in the order they should be GC'd in.

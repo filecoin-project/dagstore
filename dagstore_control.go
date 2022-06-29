@@ -70,16 +70,7 @@ func (d *DAGStore) control() {
 			continue
 		}
 		// perform GC if the transients directory has already gone above the watermark and automated gc is enabled.
-		if d.automatedGCEnabled {
-			maxTransientDirSize := d.maxTransientDirSize
-			transientsGCWatermarkHigh := d.transientsGCWatermarkHigh
-			transientsGCWatermarkLow := d.transientsGCWatermarkLow
-
-			if float64(d.totalTransientDirSize) >= float64(maxTransientDirSize)*transientsGCWatermarkHigh {
-				target := float64(maxTransientDirSize) * transientsGCWatermarkLow
-				d.gcUptoTarget(target)
-			}
-		}
+		d.automatedGCIfNeeded()
 
 		s := tsk.shard
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)

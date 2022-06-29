@@ -409,11 +409,13 @@ func (d *DAGStore) Start(ctx context.Context) error {
 				s.state = ShardStateNew
 				toRegister = append(toRegister, s)
 			}
-
-			// all shards are reclaimable in the beginning
-			d.gcs.NotifyReclaimable(s.key)
 		}
+		// all shards are reclaimable in the beginning
+		d.gcs.NotifyReclaimable(s.key)
 	}
+
+	// do an automated GC if needed
+	d.automatedGCIfNeeded()
 
 	// spawn the control goroutine.
 	d.wg.Add(1)
