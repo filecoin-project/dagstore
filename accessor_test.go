@@ -106,7 +106,7 @@ func TestMmap(t *testing.T) {
 		tempdir := t.TempDir()
 
 		var err error
-		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "")
+		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "", &mount.SimpleDownloader{})
 		require.NoError(t, err)
 
 		// warm up the upgrader so a transient is created, and we can obtain

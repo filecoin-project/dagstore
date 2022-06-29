@@ -42,8 +42,9 @@ type Shard struct {
 
 	// Mutable fields.
 	// Cannot read/write outside event loop.
-	state ShardState // persisted in PersistedShard.State
-	err   error      // persisted in PersistedShard.Error; populated if shard state is errored.
+	state         ShardState // persisted in PersistedShard.State
+	err           error      // persisted in PersistedShard.Error; populated if shard state is errored.
+	transientSize int64      // persisted in PersistedShard; size of the transient on a successful fetch from a remote Mount.
 
 	recoverOnNextAcquire bool // a shard marked in error state during initialization can be recovered on its first acquire.
 

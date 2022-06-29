@@ -10,6 +10,7 @@ require (
 	github.com/ipfs/go-ipfs-blocksutil v0.0.1
 	github.com/ipfs/go-log/v2 v2.3.0
 	github.com/ipld/go-car/v2 v2.1.1
+	github.com/jpillora/backoff v1.0.0
 	github.com/libp2p/go-libp2p-core v0.9.0 // indirect
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.3.1-0.20210902112759-1539a079fd61

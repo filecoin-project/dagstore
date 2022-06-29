@@ -64,6 +64,7 @@ func (f *FSMount) Stat(_ context.Context) (Stat, error) {
 		return Stat{}, err
 	}
 	return Stat{
+		Ready:  true,
 		Exists: true,
 		Size:   st.Size(),
 	}, nil
