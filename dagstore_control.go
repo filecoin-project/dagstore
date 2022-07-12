@@ -150,13 +150,13 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
-				go d.acquireAsync(w.ctx, w, s, s.mount)
+				go d.acquireAsync(w.ctx, w, s, s.mount, w.noDownload)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
 			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
-			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
+			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh, noDownload: tsk.noDownload}
 
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
@@ -206,7 +206,7 @@ func (d *DAGStore) control() {
 			// The goroutine will send an `OpShardRelease` task
 			// to the event loop if it fails to acquire the shard.
 			s.refs++
-			go d.acquireAsync(tsk.ctx, w, s, s.mount)
+			go d.acquireAsync(tsk.ctx, w, s, s.mount, w.noDownload)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {

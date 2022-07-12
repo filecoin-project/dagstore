@@ -14,6 +14,7 @@ type waiter struct {
 	ctx        context.Context    // governs the op if it's external
 	outCh      chan<- ShardResult // to send back the result
 	notifyDead func()             // called when the context expired and we weren't able to deliver the result
+	noDownload bool               // do not download the transient it it does not already exist
 }
 
 func (w waiter) deliver(res *ShardResult) {

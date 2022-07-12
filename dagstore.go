@@ -565,6 +565,9 @@ func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan Sha
 }
 
 type AcquireOpts struct {
+	// NoDownload can be supplied when acquiring a shard to indicate that the shard should only be acquired if the transient
+	// already exists and does not need to be downloaded from a mount that does not support random access.
+	NoDownload bool
 }
 
 // AcquireShard acquires access to the specified shard, and returns a
@@ -577,7 +580,7 @@ type AcquireOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
+func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, opts AcquireOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -586,7 +589,7 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	}
 	d.lk.Unlock()
 
-	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out, noDownload: opts.NoDownload}}
 	return d.queueTask(tsk, d.externalCh)
 }
 

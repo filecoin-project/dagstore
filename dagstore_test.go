@@ -230,6 +230,57 @@ func TestAcquireInexistentShard(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAcquireNoDownload(t *testing.T) {
+	ctx := context.Background()
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: t.TempDir(),
+		Datastore:     datastore.NewMapDatastore(),
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	ch := make(chan ShardResult, 1)
+	k := shard.KeyFromString("foo")
+	err = dagst.RegisterShard(context.Background(), k, carv2mnt, ch, RegisterOpts{})
+	require.NoError(t, err)
+
+	res := <-ch
+	require.NoError(t, res.Error)
+
+	_, err = dagst.GC(ctx)
+	require.NoError(t, err)
+
+	// Acquire without download fails
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{
+		NoDownload: true,
+	})
+	require.NoError(t, err)
+	res = <-ch
+	require.EqualValues(t, mount.ErrTransientNotFound, res.Error)
+	require.Nil(t, res.Accessor)
+
+	// acquire with download works
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{
+		NoDownload: false,
+	})
+	require.NoError(t, err)
+	res = <-ch
+	require.NoError(t, res.Error)
+	require.NotNil(t, res.Accessor)
+
+	// acquire without download works
+	err = dagst.AcquireShard(context.Background(), k, ch, AcquireOpts{
+		NoDownload: true,
+	})
+	require.NoError(t, err)
+	res = <-ch
+	require.NoError(t, res.Error)
+	require.NotNil(t, res.Accessor)
+}
+
 func TestAcquireAfterRegisterWait(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
