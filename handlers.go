@@ -62,22 +62,3 @@ func RecoverImmediately(ctx context.Context, dagst *DAGStore, failureCh chan Sha
 		}
 	}
 }
-
-// LogTraceLoop logs the output of the given trace channel until the given context expires.
-func LogTraceLoop(ctx context.Context, traceCh chan Trace, onDone func()) {
-	defer onDone()
-
-	for {
-		select {
-		// Log trace events from the DAG store
-		case tr := <-traceCh:
-			log.Debugw("trace",
-				"shard-key", tr.Key.String(),
-				"op-type", tr.Op.String(),
-				"after", tr.After.String())
-
-		case <-ctx.Done():
-			return
-		}
-	}
-}
