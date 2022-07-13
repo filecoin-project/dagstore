@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/xerrors"
+
 	"github.com/filecoin-project/dagstore/mount"
 
 	"github.com/filecoin-project/dagstore"
@@ -38,7 +40,7 @@ func AcquireShardSync(ctx context.Context, dagst *dagstore.DAGStore, sk shard.Ke
 // It is the caller's responsibility to close the returned accessor when done.
 func RegisterAndAcquireSync(ctx context.Context, dagst *dagstore.DAGStore, key shard.Key, mnt mount.Mount, ropts dagstore.RegisterOpts,
 	aopts dagstore.AcquireOpts) (*dagstore.ShardAccessor, error) {
-	if err := dagst.RegisterShard(ctx, key, mnt, nil, ropts); err != nil && err != dagstore.ErrShardExists {
+	if err := dagst.RegisterShard(ctx, key, mnt, nil, ropts); err != nil && !xerrors.Is(err, dagstore.ErrShardExists) {
 		return nil, fmt.Errorf("failed to register shard: %w", err)
 	}
 	return AcquireShardSync(ctx, dagst, key, aopts)
