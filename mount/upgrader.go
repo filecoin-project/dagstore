@@ -603,7 +603,7 @@ func downloadNBytes(ctx context.Context, rd Reader, n int64, out *os.File) (hasM
 			return false, nil
 		}
 		if rerr != nil {
-			return false, fmt.Errorf("error while reading from the underlying mount: %w", err)
+			return false, fmt.Errorf("error while reading from the underlying mount: %w", rerr)
 		}
 	}
 }
