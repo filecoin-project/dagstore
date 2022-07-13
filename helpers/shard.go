@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/filecoin-project/dagstore/mount"
+
 	"github.com/filecoin-project/dagstore"
 	"github.com/filecoin-project/dagstore/shard"
 )
@@ -30,4 +32,14 @@ func AcquireShardSync(ctx context.Context, dagst *dagstore.DAGStore, sk shard.Ke
 	}
 
 	return res.Accessor, nil
+}
+
+// RegisterAndAcquireSync attempts to register the shard if it's not already registered and then proceeds to synchronously acquire the shard.
+// It is the caller's responsibility to close the returned accessor when done.
+func RegisterAndAcquireSync(ctx context.Context, dagst *dagstore.DAGStore, key shard.Key, mnt mount.Mount, ropts dagstore.RegisterOpts,
+	aopts dagstore.AcquireOpts) (*dagstore.ShardAccessor, error) {
+	if err := dagst.RegisterShard(ctx, key, mnt, nil, ropts); err != nil && err != dagstore.ErrShardExists {
+		return nil, fmt.Errorf("failed to register shard: %w", err)
+	}
+	return AcquireShardSync(ctx, dagst, key, aopts)
 }
