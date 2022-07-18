@@ -467,6 +467,7 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 	if err != nil {
 		return fmt.Errorf("failed to fetch underlying mount: %w", err)
 	}
+	defer from.Close()
 
 	// reserveWithBackoff attempts to make a reservation with the allocator using back-off retry mechanism
 	// in case of a failue.
