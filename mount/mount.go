@@ -15,6 +15,10 @@ var (
 	// ErrRandomAccessUnsupported is returned when ReadAt is called on a mount
 	// that does not support random access.
 	ErrRandomAccessUnsupported = errors.New("mount does not support random access")
+
+	// ErrTransientNotFound is returned when we don't have the transient for a given shard
+	// and the caller does not want to download it as part of a Fetch.
+	ErrTransientNotFound = errors.New("transient not found")
 )
 
 // Kind is an enum describing the source of a Mount.
