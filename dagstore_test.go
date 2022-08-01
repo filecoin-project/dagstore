@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/filecoin-project/dagstore/gc"
 
 	"github.com/multiformats/go-multihash"
 
@@ -375,10 +378,17 @@ func TestRestartResumesRegistration(t *testing.T) {
 
 	sink := tracer(128)
 	dagst, err := NewDAGStore(Config{
-		MountRegistry: r,
-		TransientsDir: dir,
-		Datastore:     store,
-		TraceCh:       sink,
+		MountRegistry:      r,
+		TransientsDir:      dir,
+		Datastore:          store,
+		TraceCh:            sink,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	})
 	require.NoError(t, err)
 
@@ -409,6 +419,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	info, err := dagst.GetShardInfo(k)
 	require.NoError(t, err)
 	require.EqualValues(t, ShardStateInitializing, info.ShardState)
+	require.EqualValues(t, 0, info.TransientSize)
 
 	t.Log("closing")
 
@@ -431,32 +442,58 @@ func TestRestartResumesRegistration(t *testing.T) {
 	bm.UnblockNext(1)
 
 	dagst, err = NewDAGStore(Config{
-		MountRegistry: r,
-		TransientsDir: dir,
-		Datastore:     store,
-		TraceCh:       sink,
+		MountRegistry:      r,
+		TransientsDir:      dir,
+		Datastore:          store,
+		TraceCh:            sink,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	})
+	require.NoError(t, err)
+
+	st, err := carv2mnt.Stat(context.Background())
 	require.NoError(t, err)
 
 	err = dagst.Start(context.Background())
 	require.NoError(t, err)
 
-	// this time we will receive three traces; OpShardInitialize, and OpShardMakeAvailable.
-	n, timedOut = sink.Read(traces, 1*time.Second)
-	require.Equal(t, 3, n)
+	// this time we will receive three traces; OpShardRegister, OpShardInitialize, OpShardReserveTransient AND OpShardMakeAvailable.
+	n, timedOut = sink.Read(traces, 3*time.Second)
+	require.Equal(t, 4, n)
 	require.True(t, timedOut)
 
 	// trace 1.
 	require.Equal(t, OpShardRegister, traces[0].Op)
 	require.Equal(t, ShardStateNew, traces[0].After.ShardState)
+	require.EqualValues(t, 0, traces[0].TransientDirSizeCounter)
 
 	// trace 2.
 	require.Equal(t, OpShardInitialize, traces[1].Op)
 	require.Equal(t, ShardStateInitializing, traces[1].After.ShardState)
+	require.EqualValues(t, 0, traces[1].TransientDirSizeCounter)
 
-	// trace 3.
-	require.Equal(t, OpShardMakeAvailable, traces[2].Op)
-	require.Equal(t, ShardStateAvailable, traces[2].After.ShardState)
+	// trace 3
+	require.Equal(t, OpShardReserveTransient, traces[2].Op)
+	require.Equal(t, ShardStateInitializing, traces[2].After.ShardState)
+	require.EqualValues(t, st.Size, traces[2].TransientDirSizeCounter)
+
+	// trace 4.
+	require.Equal(t, OpShardMakeAvailable, traces[3].Op)
+	require.Equal(t, ShardStateAvailable, traces[3].After.ShardState)
+	require.EqualValues(t, st.Size, traces[3].TransientDirSizeCounter)
+	sz, err := dagst.transientDirSize()
+	require.NoError(t, err)
+	require.EqualValues(t, st.Size, sz)
+
+	// ensure shard transient size is as expected
+	info, err = dagst.GetShardInfo(k)
+	require.NoError(t, err)
+	require.EqualValues(t, st.Size, info.TransientSize)
 
 	// ensure we have indices.
 	idx, err := dagst.indices.GetFullIndex(k)
@@ -484,8 +521,15 @@ func TestRestartResumesRegistration(t *testing.T) {
 func TestGC(t *testing.T) {
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
-		MountRegistry: testRegistry(t),
-		TransientsDir: dir,
+		MountRegistry:      testRegistry(t),
+		TransientsDir:      dir,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	})
 	require.NoError(t, err)
 
@@ -519,6 +563,16 @@ func TestGC(t *testing.T) {
 		require.True(t, ok)
 		require.NoError(t, err)
 	}
+
+	st, err := carv2mnt.Stat(context.Background())
+	require.NoError(t, err)
+
+	// space taken up by transient dir should only be equal to that required by 25 transients
+	require.EqualValues(t, 25*st.Size, results.TransientDirSizeAfterGC)
+
+	sz, err := dagst.transientDirSize()
+	require.NoError(t, err)
+	require.EqualValues(t, 25*st.Size, sz)
 }
 
 func TestOrphansRemovedOnStartup(t *testing.T) {
@@ -682,10 +736,17 @@ func TestIndexingFailure(t *testing.T) {
 	sink := tracer(128)
 	failures := make(chan ShardResult, 128)
 	dagst, err := NewDAGStore(Config{
-		MountRegistry: r,
-		TransientsDir: dir,
-		TraceCh:       sink,
-		FailureCh:     failures,
+		MountRegistry:      r,
+		TransientsDir:      dir,
+		TraceCh:            sink,
+		FailureCh:          failures,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	})
 	require.NoError(t, err)
 
@@ -719,13 +780,17 @@ func TestIndexingFailure(t *testing.T) {
 		require.Error(t, i.Error)
 	}
 
-	evts := make([]Trace, 48)
+	evts := make([]Trace, 64)
 	n, timedOut := sink.Read(evts, 50*time.Millisecond)
 	require.False(t, timedOut)
-	require.Equal(t, 48, n)
+	require.Equal(t, 64, n)
 
-	// first 48 events are OpShardRegister, OpShardInitialize, OpShardFail.
-	for i := 0; i < 48; i++ {
+	st, err := junkmnt.Stat(context.Background())
+	require.NoError(t, err)
+
+	// first 64 events are OpShardRegister, OpShardInitialize, OpShardReserveTransient AND OpShardFail.
+	reserveCount := int64(1)
+	for i := 0; i < 64; i++ {
 		evt := evts[i]
 		switch evt.Op {
 		case OpShardRegister:
@@ -734,6 +799,11 @@ func TestIndexingFailure(t *testing.T) {
 		case OpShardInitialize:
 			require.EqualValues(t, ShardStateInitializing, evt.After.ShardState)
 			require.NoError(t, evt.After.Error)
+		case OpShardReserveTransient:
+			require.EqualValues(t, ShardStateInitializing, evt.After.ShardState)
+			require.NoError(t, evt.After.Error)
+			require.EqualValues(t, reserveCount*st.Size, evt.TransientDirSizeCounter)
+			reserveCount++
 		case OpShardFail:
 			require.EqualValues(t, ShardStateErrored, evt.After.ShardState)
 			require.Error(t, evt.After.Error)
@@ -787,16 +857,19 @@ func TestIndexingFailure(t *testing.T) {
 			require.Nil(t, res.Accessor)
 		}
 
-		evts := make([]Trace, 48)
+		evts := make([]Trace, 64)
 		n, timedOut := sink.Read(evts, 50*time.Millisecond)
 		require.False(t, timedOut)
-		require.Equal(t, 48, n)
+		require.Equal(t, 64, n)
 
-		// these 48 traces are OpShardRecover, OpShardFail, OpShardAcquire.
-		for i := 0; i < 48; i++ {
+		// these 48 traces are OpShardRecover, OpShardReserveTransient, OpShardFail, OpShardAcquire.
+		for i := 0; i < 64; i++ {
 			evt := evts[i]
 			switch evt.Op {
 			case OpShardRecover:
+				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
+			case OpShardReserveTransient:
 				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
 				require.Error(t, evt.After.Error)
 			case OpShardFail:
@@ -810,11 +883,21 @@ func TestIndexingFailure(t *testing.T) {
 			}
 		}
 
+		// after the first call to recover, we'd have free the space taken up by one of the transients
+		require.EqualValues(t, st.Size*15, evts[0].TransientDirSizeCounter)
+		// because we would have made reservations again for each shard, we'd be using the same amount of transient space.
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
+		sz, err := dagst.transientDirSize()
+		require.NoError(t, err)
+		require.EqualValues(t, st.Size*16, sz)
 	})
 
 	t.Run("recovers", func(t *testing.T) {
+		prevSize := st.Size
 		// use a good path.
 		junkmnt.Path = testdata.FSPathCarV2
+		st, err := junkmnt.Stat(context.Background())
+		require.NoError(t, err)
 
 		// try to recover, it will succeed.
 		for i := 0; i < 16; i++ {
@@ -858,16 +941,19 @@ func TestIndexingFailure(t *testing.T) {
 			require.NotNil(t, res.Accessor)
 		}
 
-		evts := make([]Trace, 48)
+		evts := make([]Trace, 64)
 		n, timedOut := sink.Read(evts, 50*time.Millisecond)
 		require.False(t, timedOut)
-		require.Equal(t, 48, n)
+		require.Equal(t, 64, n)
 
 		// these 48 traces are OpShardRecover, OpShardFail.
-		for i := 0; i < 48; i++ {
+		for i := 0; i < 64; i++ {
 			evt := evts[i]
 			switch evt.Op {
 			case OpShardRecover:
+				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
+				require.Error(t, evt.After.Error)
+			case OpShardReserveTransient:
 				require.EqualValues(t, ShardStateRecovering, evt.After.ShardState)
 				require.Error(t, evt.After.Error)
 			case OpShardMakeAvailable:
@@ -880,6 +966,13 @@ func TestIndexingFailure(t *testing.T) {
 				t.Fatalf("unexpected op: %s", evt.Op)
 			}
 		}
+		// after the first call to recover, we'd have free the space taken up by one of the transients
+		require.EqualValues(t, prevSize*15, evts[0].TransientDirSizeCounter)
+		// because we would have made reservations again for each shard, we'd be using the same amount of transient space.
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
+		sz, err := dagst.transientDirSize()
+		require.NoError(t, err)
+		require.EqualValues(t, st.Size*16, sz)
 	})
 }
 
@@ -889,10 +982,17 @@ func TestFailureRecovery(t *testing.T) {
 	sink := tracer(128)
 	failures := make(chan ShardResult, 128)
 	dagst, err := NewDAGStore(Config{
-		MountRegistry: r,
-		TransientsDir: dir,
-		TraceCh:       sink,
-		FailureCh:     failures,
+		MountRegistry:      r,
+		TransientsDir:      dir,
+		TraceCh:            sink,
+		FailureCh:          failures,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	})
 
 	go RecoverImmediately(context.Background(), dagst, failures, 10, nil) // 10 max attempts.
@@ -910,10 +1010,13 @@ func TestFailureRecovery(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	evts := make([]Trace, 368)
+	evts := make([]Trace, 544)
 	n, timedOut := sink.Read(evts, 5*time.Second)
 	require.False(t, timedOut)
-	require.Equal(t, 368, n)
+	require.Equal(t, 544, n)
+
+	st, err := junkmnt.Stat(context.Background())
+	require.NoError(t, err)
 
 	counts := map[OpType]int{}
 	for _, evt := range evts {
@@ -933,6 +1036,12 @@ func TestFailureRecovery(t *testing.T) {
 	require.Equal(t, counts[OpShardInitialize], 16)
 	require.Equal(t, counts[OpShardFail], 176)
 	require.Equal(t, counts[OpShardRecover], 160)
+	require.Equal(t, counts[OpShardReserveTransient], 176)
+
+	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
+	sz, err := dagst.transientDirSize()
+	require.NoError(t, err)
+	require.EqualValues(t, st.Size*16, sz)
 }
 
 func TestRecoveryOnStart(t *testing.T) {
@@ -943,11 +1052,18 @@ func TestRecoveryOnStart(t *testing.T) {
 	sink := tracer(128)
 	failures := make(chan ShardResult, 128)
 	config := Config{
-		MountRegistry: r,
-		TransientsDir: dir,
-		TraceCh:       sink,
-		FailureCh:     failures,
-		Datastore:     ds,
+		MountRegistry:      r,
+		TransientsDir:      dir,
+		TraceCh:            sink,
+		FailureCh:          failures,
+		Datastore:          ds,
+		AutomatedGCEnabled: true,
+		AutomatedGCConfig: &AutomatedGCConfig{
+			MaxTransientDirSize:       math.MaxInt64,
+			TransientsGCWatermarkHigh: 1.0,
+			TransientsGCWatermarkLow:  0.5,
+			GarbeCollectionStrategy:   gc.NewLRUGarbageCollector(),
+		},
 	}
 	dagst, err := NewDAGStore(config)
 	require.NoError(t, err)
@@ -966,10 +1082,13 @@ func TestRecoveryOnStart(t *testing.T) {
 		keys = append(keys, k)
 	}
 
-	evts := make([]Trace, 48)
+	st, err := junkmnt.Stat(context.Background())
+	require.NoError(t, err)
+
+	evts := make([]Trace, 64)
 	n, timedOut := sink.Read(evts, 1*time.Second)
 	require.False(t, timedOut)
-	require.Equal(t, 48, n)
+	require.Equal(t, 64, n)
 
 	counts := map[OpType]int{}
 	for _, evt := range evts {
@@ -978,6 +1097,12 @@ func TestRecoveryOnStart(t *testing.T) {
 	require.Equal(t, counts[OpShardRegister], 16)
 	require.Equal(t, counts[OpShardInitialize], 16)
 	require.Equal(t, counts[OpShardFail], 16)
+	require.Equal(t, counts[OpShardReserveTransient], 16)
+
+	require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
+	sz, err := dagst.transientDirSize()
+	require.NoError(t, err)
+	require.EqualValues(t, st.Size*16, sz)
 
 	err = dagst.Close()
 	require.NoError(t, err)
@@ -1013,11 +1138,11 @@ func TestRecoveryOnStart(t *testing.T) {
 		err = dagst.Start(context.Background())
 		require.NoError(t, err)
 
-		// 32 events: recovery and failure.
-		evts := make([]Trace, 32)
+		// 48 events: recovery, reservation and failure.
+		evts := make([]Trace, 48)
 		n, timedOut := sink.Read(evts, 1*time.Second)
 		require.False(t, timedOut)
-		require.Equal(t, 32, n)
+		require.Equal(t, 48, n)
 
 		counts := map[OpType]int{}
 		for _, evt := range evts {
@@ -1025,6 +1150,12 @@ func TestRecoveryOnStart(t *testing.T) {
 		}
 		require.Equal(t, counts[OpShardRecover], 16)
 		require.Equal(t, counts[OpShardFail], 16)
+		require.Equal(t, counts[OpShardReserveTransient], 16)
+
+		require.EqualValues(t, st.Size*16, evts[len(evts)-1].TransientDirSizeCounter)
+		sz, err := dagst.transientDirSize()
+		require.NoError(t, err)
+		require.EqualValues(t, st.Size*16, sz)
 
 		// all shards continue as failed.
 		info := dagst.AllShardsInfo()
@@ -1068,19 +1199,20 @@ func TestRecoveryOnStart(t *testing.T) {
 			require.Error(t, ss.Error)
 		}
 
-		// 48 events: acquire, recover, fail.
+		// 64 events: acquire, recover, reservation and fail.
 		evts = make([]Trace, 64)
 		n, timedOut = sink.Read(evts, 500*time.Millisecond)
-		require.True(t, timedOut)
-		require.Equal(t, 48, n)
+		require.False(t, timedOut)
+		require.Equal(t, 64, n)
 
 		counts := map[OpType]int{}
-		for _, evt := range evts[:48] {
+		for _, evt := range evts[:64] {
 			counts[evt.Op]++
 		}
 		require.Equal(t, counts[OpShardAcquire], 16)
 		require.Equal(t, counts[OpShardRecover], 16)
 		require.Equal(t, counts[OpShardFail], 16)
+		require.Equal(t, counts[OpShardReserveTransient], 16)
 
 		// a second acquire for each shard will also fail, and will not trigger
 		// any recovery events.
@@ -1105,7 +1237,6 @@ func TestRecoveryOnStart(t *testing.T) {
 			require.Equal(t, OpShardAcquire, evt.Op)
 		}
 	})
-
 }
 
 // TestFailingAcquireErrorPropagates tests that if multiple acquierers are
@@ -1342,14 +1473,22 @@ func TestAcquireContextCancelled(t *testing.T) {
 	require.NotNil(t, res.Accessor)
 	err = res.Accessor.Close()
 	require.NoError(t, err)
-
 }
 
-// registerShards registers n shards concurrently, using the CARv2 mount.
-func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
+func registerShardSync(t *testing.T, dagst *DAGStore, key shard.Key, mnt mount.Mount, opts RegisterOpts) error {
+	ch := make(chan ShardResult, 1)
+	err := dagst.RegisterShard(context.Background(), key, mnt, ch, opts)
+	require.NoError(t, err)
+	res := <-ch
+	return res.Error
+}
+
+func registerShardsWithKeyPrefix(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, prefix string,
+	nExpectedShards int, opts RegisterOpts) (ret []shard.Key) {
+
 	grp, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < n; i++ {
-		k := shard.KeyFromString(fmt.Sprintf("shard-%d", i))
+		k := shard.KeyFromString(fmt.Sprintf("%sshard-%d", prefix, i))
 		grp.Go(func() error {
 			ch := make(chan ShardResult, 1)
 			err := dagst.RegisterShard(context.Background(), k, mnt, ch, opts)
@@ -1364,9 +1503,9 @@ func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts 
 
 	require.NoError(t, grp.Wait())
 
-	info := dagst.AllShardsInfo()
-	require.Len(t, info, n)
-	for k, ss := range info {
+	for _, k := range ret {
+		ss, err := dagst.GetShardInfo(k)
+		require.NoError(t, err)
 		if opts.LazyInitialization {
 			require.Equal(t, ShardStateNew, ss.ShardState)
 			require.NoError(t, ss.Error)
@@ -1381,6 +1520,11 @@ func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts 
 	}
 
 	return ret
+}
+
+// registerShards registers n shards concurrently, using the CARv2 mount.
+func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
+	return registerShardsWithKeyPrefix(t, dagst, n, mnt, "", n, opts)
 }
 
 // acquireShard acquires the shard known by key `k` concurrently `n` times.
