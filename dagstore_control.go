@@ -3,6 +3,10 @@ package dagstore
 import (
 	"context"
 	"fmt"
+
+	"github.com/filecoin-project/dagstore/mount"
+
+	"github.com/filecoin-project/dagstore/shard"
 )
 
 type OpType int
@@ -16,6 +20,12 @@ const (
 	OpShardFail
 	OpShardRelease
 	OpShardRecover
+	OpShardReserveTransient
+	OpShardReleaseTransientReservation
+)
+
+var (
+	defaultReservation = 134217728 // 128 Mib
 )
 
 func (o OpType) String() string {
@@ -27,7 +37,9 @@ func (o OpType) String() string {
 		"OpShardAcquire",
 		"OpShardFail",
 		"OpShardRelease",
-		"OpShardRecover"}[o]
+		"OpShardRecover",
+		"OpShardReserveTransient",
+		"OpShardReleaseTransientReservation"}[o]
 }
 
 // control runs the DAG store's event loop.
@@ -53,10 +65,12 @@ func (d *DAGStore) control() {
 		}
 
 		if gc != nil {
-			// this was a GC request.
-			d.gc(gc)
+			// this was a manual GC request.
+			d.manualGC(gc)
 			continue
 		}
+		// perform GC if the transients directory has already gone above the watermark and automated gc is enabled.
+		d.automatedGCIfNeeded()
 
 		s := tsk.shard
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
@@ -105,6 +119,14 @@ func (d *DAGStore) control() {
 			// or when recovering from a failure.
 
 			s.state = ShardStateAvailable
+
+			st, err := s.mount.Stat(d.ctx)
+			if err != nil {
+				log.Errorw("failed to stat transient", "shard", s.key, "error", err)
+			} else {
+				s.transientSize = st.Size
+			}
+
 			s.err = nil // nillify past errors
 
 			// notify the registration waiter, if there is one.
@@ -203,6 +225,7 @@ func (d *DAGStore) control() {
 
 		case OpShardFail:
 			s.state = ShardStateErrored
+			s.transientSize = 0
 			s.err = tsk.err
 
 			// notify the registration waiter, if there is one.
@@ -263,7 +286,6 @@ func (d *DAGStore) control() {
 
 			// set the state to recovering.
 			s.state = ShardStateRecovering
-
 			// park the waiter; there can never be more than one because
 			// subsequent calls to recover the same shard will be rejected
 			// because the state is no longer ShardStateErrored.
@@ -272,9 +294,11 @@ func (d *DAGStore) control() {
 			// attempt to delete the transient first; this can happen if the
 			// transient has been removed by hand. DeleteTransient resets the
 			// transient to "" always.
-			if err := s.mount.DeleteTransient(); err != nil {
+			freed, err := s.mount.DeleteTransient()
+			if err != nil {
 				log.Warnw("recovery: failed to delete transient", "shard", s.key, "error", err)
 			}
+			d.totalTransientDirSize -= freed
 
 			// attempt to drop the index.
 			dropped, err := d.indices.DropFullIndex(s.key)
@@ -300,10 +324,61 @@ func (d *DAGStore) control() {
 			d.lk.Unlock()
 			// TODO are we guaranteed that there are no queued items for this shard?
 
+		case OpShardReserveTransient:
+			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {
+				// sanity check failed
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'serving' or `initialising` or `recovering` "+
+					"state; was: %s", ErrShardIllegalReservationRequest, s.state)
+				break
+			}
+
+			toReserve := tsk.reservationReq.want
+			reservationSizeUnknown := toReserve == 0
+
+			// increase the space allocated linearly as more reservations are requested for a shard whose
+			// transient size is unknown upfront.
+			if reservationSizeUnknown {
+				toReserve = (tsk.reservationReq.nPrevReservations + 1) * d.defaultReservationSize
+			}
+
+			mkReservation := func() {
+				d.totalTransientDirSize += toReserve
+				tsk.reservationReq.response <- &reservationResp{reserved: toReserve}
+			}
+			// do we have enough space available ? if yes, allocate the reservation right away
+			if d.totalTransientDirSize+toReserve <= d.maxTransientDirSize {
+				mkReservation()
+				break
+			}
+
+			// otherwise, perform a GC to make space for the reservation.
+			d.gcUptoTarget(float64(d.maxTransientDirSize - toReserve))
+
+			// if we have enough space available after the gc, allocate the reservation
+			if d.totalTransientDirSize+toReserve <= d.maxTransientDirSize {
+				mkReservation()
+				break
+			}
+
+			// we weren't able to make space for the reservation request even after a GC attempt.
+			// fail the reservation request.
+			tsk.reservationReq.response <- &reservationResp{err: mount.ErrNotEnoughSpaceInTransientsDir}
+
+		case OpShardReleaseTransientReservation:
+			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {
+				// sanity check failed
+				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'serving' or `initialising` or `recovering` "+
+					"state; was: %s", ErrShardIllegalReservationRequest, s.state)
+				break
+			}
+			d.totalTransientDirSize -= tsk.releaseReq.release
+
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
-
 		}
+
+		// update the GarbageCollector
+		d.notifyGCStrategy(s.key, s, tsk.op)
 
 		// persist the current shard state.
 		if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
@@ -321,6 +396,7 @@ func (d *DAGStore) control() {
 					Error:      s.err,
 					refs:       s.refs,
 				},
+				TransientDirSizeCounter: d.totalTransientDirSize,
 			}
 			d.traceCh <- n
 			log.Debugw("finished writing trace to the trace channel", "shard", s.key)
@@ -329,6 +405,25 @@ func (d *DAGStore) control() {
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
 
 		s.lk.Unlock()
+	}
+}
+
+func (d *DAGStore) notifyGCStrategy(key shard.Key, s *Shard, op OpType) {
+	if op == OpShardDestroy {
+		d.gcs.NotifyRemoved(s.key)
+		return
+	}
+
+	// notify the garbage collector if shard was accessed
+	if op == OpShardAcquire {
+		d.gcs.NotifyAccessed(key)
+	}
+
+	// notify the garbage collector if shard is in a state where it can be reclaimed/gc'd.
+	if nAcq := len(s.wAcquire); nAcq == 0 && (s.state == ShardStateAvailable || s.state == ShardStateErrored) {
+		d.gcs.NotifyReclaimable(key)
+	} else {
+		d.gcs.NotifyNotReclaimable(key)
 	}
 }
 
@@ -351,4 +446,59 @@ func (d *DAGStore) consumeNext() (tsk *task, gc chan *GCResult, error error) {
 	case <-d.ctx.Done():
 		return nil, nil, d.ctx.Err() // TODO drain and process before returning?
 	}
+}
+
+var _ mount.TransientAllocator = (*transientAllocator)(nil)
+
+// transientAllocator submits messages to the event loop to reserve and release space
+// for transient downloads when the mount does not know the size of the transient to be downloaded upfront.
+type transientAllocator struct {
+	d *DAGStore
+}
+
+func (t *transientAllocator) Reserve(ctx context.Context, key shard.Key, nPrevReservations int64, toReserve int64) (reserved int64, err error) {
+	t.d.lk.Lock()
+	s, ok := t.d.shards[key]
+	if !ok {
+		t.d.lk.Unlock()
+		return 0, ErrShardUnknown
+	}
+	t.d.lk.Unlock()
+
+	out := make(chan *reservationResp, 1)
+	tsk := &task{
+		op:    OpShardReserveTransient,
+		shard: s,
+		reservationReq: &reservationReq{
+			nPrevReservations: nPrevReservations,
+			want:              toReserve,
+			response:          out,
+		},
+	}
+
+	if err := t.d.queueTask(tsk, t.d.completionCh); err != nil {
+		return 0, fmt.Errorf("failed to send reservation request: %w", err)
+	}
+
+	select {
+	case resp := <-out:
+		return resp.reserved, resp.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (t *transientAllocator) Release(_ context.Context, key shard.Key, release int64) error {
+	t.d.lk.Lock()
+	s, ok := t.d.shards[key]
+	if !ok {
+		t.d.lk.Unlock()
+		return ErrShardUnknown
+	}
+	t.d.lk.Unlock()
+
+	tsk := &task{op: OpShardReleaseTransientReservation, shard: s,
+		releaseReq: &releaseReq{release: release}}
+
+	return t.d.queueTask(tsk, t.d.completionCh)
 }
