@@ -1390,19 +1390,20 @@ func TestDestroyShard(t *testing.T) {
 	require.NoError(t, res.Error)
 
 	// Try to destroy both shards, fail for any error except Active Shards
-	for _, v := range sh {
-		desres := make(chan ShardResult, 1)
-		err = dagst.DestroyShard(context.Background(), shard.KeyFromString(v), desres, DestroyOpts{})
-		require.NoError(t, err)
-		res = <-desres
-		if res.Error != nil {
-			require.Contains(t, res.Error, "failed to destroy shard; active references")
-		}
+	desres1 := make(chan ShardResult, 1)
+	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[0]), desres1, DestroyOpts{})
+	require.NoError(t, err)
+	res1 := <-desres1
+	require.Contains(t, res1.Error, "failed to destroy shard; active references")
 
-		// Confirm 1 shard is not deleted
-		info := dagst.AllShardsInfo()
-		require.Equal(t, 1, len(info))
-	}
+	desres2 := make(chan ShardResult, 1)
+	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[1]), desres2, DestroyOpts{})
+	require.NoError(t, err)
+	res2 := <-desres2
+	require.Contains(t, res2.Error, "failed to destroy shard; active references")
+
+	info := dagst.AllShardsInfo()
+	require.Equal(t, 1, len(info))
 }
 
 // registerShards registers n shards concurrently, using the CARv2 mount.
