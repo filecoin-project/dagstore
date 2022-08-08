@@ -1345,6 +1345,66 @@ func TestAcquireContextCancelled(t *testing.T) {
 
 }
 
+// TestDestroyShard tests that shards are removed properly and relevant
+// errors are returned in case of failure.
+func TestDestroyShard(t *testing.T) {
+	dir := t.TempDir()
+	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
+	sink := tracer(128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+		Datastore:     store,
+		TraceCh:       sink,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	sh := []string{"foo", "bar"}
+
+	for _, v := range sh {
+		ch := make(chan ShardResult, 1)
+		k := shard.KeyFromString(v)
+		counting := &mount.Counting{Mount: carv2mnt}
+		err = dagst.RegisterShard(context.Background(), k, counting, ch, RegisterOpts{
+			LazyInitialization: false,
+		})
+		require.NoError(t, err)
+		res1 := <-ch
+		require.NoError(t, res1.Error)
+
+		info, err := dagst.GetShardInfo(k)
+		require.NoError(t, err)
+		require.Equal(t, ShardStateAvailable, info.ShardState)
+	}
+
+	// Acquire one shard and keep other Available
+	acres := make(chan ShardResult, 1)
+
+	err = dagst.AcquireShard(context.Background(), shard.KeyFromString(sh[0]), acres, AcquireOpts{})
+	require.NoError(t, err)
+
+	res := <-acres
+	require.NoError(t, res.Error)
+
+	// Try to destroy both shards, fail for any error except Active Shards
+	for _, v := range sh {
+		desres := make(chan ShardResult, 1)
+		err = dagst.DestroyShard(context.Background(), shard.KeyFromString(v), desres, DestroyOpts{})
+		require.NoError(t, err)
+		res = <-desres
+		if res.Error != nil {
+			require.Contains(t, res.Error, "failed to destroy shard; active references")
+		}
+
+		// Confirm 1 shard is not deleted
+		info := dagst.AllShardsInfo()
+		require.Equal(t, 1, len(info))
+	}
+}
+
 // registerShards registers n shards concurrently, using the CARv2 mount.
 func registerShards(t *testing.T, dagst *DAGStore, n int, mnt mount.Mount, opts RegisterOpts) (ret []shard.Key) {
 	grp, _ := errgroup.WithContext(context.Background())
