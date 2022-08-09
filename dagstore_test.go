@@ -1394,13 +1394,13 @@ func TestDestroyShard(t *testing.T) {
 	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[0]), desres1, DestroyOpts{})
 	require.NoError(t, err)
 	res1 := <-desres1
-	require.Contains(t, res1.Error, "failed to destroy shard; active references")
+	require.Contains(t, res1.Error.Error(), "failed to destroy shard; active references")
 
 	desres2 := make(chan ShardResult, 1)
 	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[1]), desres2, DestroyOpts{})
 	require.NoError(t, err)
 	res2 := <-desres2
-	require.Contains(t, res2.Error, "failed to destroy shard; active references")
+	require.NoError(t, res2.Error)
 
 	info := dagst.AllShardsInfo()
 	require.Equal(t, 1, len(info))
