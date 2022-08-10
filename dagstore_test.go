@@ -35,6 +35,67 @@ func init() {
 	_ = logging.SetLogLevel("dagstore", "DEBUG")
 }
 
+// TestDestroyShard tests that shards are removed properly and relevant
+// errors are returned in case of failure.
+func TestDestroyShard(t *testing.T) {
+	dir := t.TempDir()
+	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
+	sink := tracer(128)
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+		Datastore:     store,
+		TraceCh:       sink,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	sh := []string{"foo", "bar"}
+
+	for _, v := range sh {
+		ch := make(chan ShardResult, 1)
+		k := shard.KeyFromString(v)
+		counting := &mount.Counting{Mount: carv2mnt}
+		err = dagst.RegisterShard(context.Background(), k, counting, ch, RegisterOpts{
+			LazyInitialization: false,
+		})
+		require.NoError(t, err)
+		res1 := <-ch
+		require.NoError(t, res1.Error)
+
+		info, err := dagst.GetShardInfo(k)
+		require.NoError(t, err)
+		require.Equal(t, ShardStateAvailable, info.ShardState)
+	}
+
+	// Acquire one shard and keep other Available
+	acres := make(chan ShardResult, 1)
+
+	err = dagst.AcquireShard(context.Background(), shard.KeyFromString(sh[0]), acres, AcquireOpts{})
+	require.NoError(t, err)
+
+	res := <-acres
+	require.NoError(t, res.Error)
+
+	// Try to destroy both shards, fail for any error except Active Shards
+	desres1 := make(chan ShardResult, 1)
+	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[0]), desres1, DestroyOpts{})
+	require.NoError(t, err)
+	res1 := <-desres1
+	require.Contains(t, res1.Error.Error(), "failed to destroy shard; active references")
+
+	desres2 := make(chan ShardResult, 1)
+	err = dagst.DestroyShard(context.Background(), shard.KeyFromString(sh[1]), desres2, DestroyOpts{})
+	require.NoError(t, err)
+	res2 := <-desres2
+	require.NoError(t, res2.Error)
+
+	info := dagst.AllShardsInfo()
+	require.Equal(t, 1, len(info))
+}
+
 func TestRegisterUsingExistingTransient(t *testing.T) {
 	ds := datastore.NewMapDatastore()
 	dagst, err := NewDAGStore(Config{
