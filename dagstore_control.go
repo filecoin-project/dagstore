@@ -298,6 +298,8 @@ func (d *DAGStore) control() {
 			d.lk.Lock()
 			delete(d.shards, s.key)
 			d.lk.Unlock()
+			res := &ShardResult{Key: s.key, Error: nil}
+			d.dispatchResult(res, tsk.waiter)
 			// TODO are we guaranteed that there are no queued items for this shard?
 
 		default:
