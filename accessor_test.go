@@ -31,6 +31,10 @@ import (
 // capable of returning *os.File as a mount.Reader will end up being mmapped.
 // Both the FileMount and the Upgrader fall in that category.
 func TestMmap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows")
+	}
+
 	run := func(t *testing.T, mnt mount.Mount, expect bool, name string) {
 		ctx := context.TODO()
 		// create three shard accessors, with a blockstore each.

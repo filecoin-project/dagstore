@@ -261,7 +261,10 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 			for _, u := range upgraders {
 				u := u
 				errgrp.Go(func() error {
-					_, err := u.Fetch(ctx)
+					f, err := u.Fetch(ctx)
+					if f != nil {
+						defer f.Close()
+					}
 					return err
 				})
 			}

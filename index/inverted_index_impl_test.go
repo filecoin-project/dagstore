@@ -63,6 +63,8 @@ func TestLevelDBBatch(t *testing.T) {
 		require.Len(t, sk, 1)
 		require.Contains(t, sk, sk1)
 	}
+
+	require.NoError(t, dstore.Close())
 }
 
 func TestDatastoreIndex(t *testing.T) {
