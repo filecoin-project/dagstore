@@ -56,9 +56,9 @@ const (
 //
 // MountTypes must define a deterministic URL representation which will be used to:
 //
-//  a. deserialise the Mount from DAG persistence when resuming the system by
-//     using a pre-defined Mount factory mapped to the URL scheme.
-//  b. support adding mounts from configuration files.
+//	a. deserialise the Mount from DAG persistence when resuming the system by
+//	   using a pre-defined Mount factory mapped to the URL scheme.
+//	b. support adding mounts from configuration files.
 type Mount interface {
 	io.Closer
 

@@ -1161,7 +1161,6 @@ func TestRecoveryOnStart(t *testing.T) {
 		require.True(t, timedOut)
 		require.Equal(t, 16, n)
 
-		counts = map[OpType]int{}
 		for _, evt := range evts[:16] {
 			require.Equal(t, OpShardAcquire, evt.Op)
 		}

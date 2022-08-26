@@ -3,7 +3,7 @@ package mount
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -26,7 +26,9 @@ func (m *MockMount) Serialize() *url.URL {
 		Scheme: "aaa", // random, will get replaced
 		Host:   m.Val,
 	}
-	u.Query().Set("size", strconv.FormatInt(m.StatSize, 10))
+	q := u.Query()
+	q.Set("size", strconv.FormatInt(m.StatSize, 10))
+	u.RawQuery = q.Encode()
 	return u
 }
 
@@ -161,7 +163,7 @@ func TestRegistryRecognizedType(t *testing.T) {
 func fetchAndReadAll(t *testing.T, m Mount) string {
 	rd, err := m.Fetch(context.Background())
 	require.NoError(t, err)
-	bz, err := ioutil.ReadAll(rd)
+	bz, err := io.ReadAll(rd)
 	require.NoError(t, err)
 	return string(bz)
 }

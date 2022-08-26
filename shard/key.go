@@ -35,10 +35,8 @@ func (k Key) String() string {
 	return k.str
 }
 
-//
 // We need a custom JSON marshaller and unmarshaller because str is a
 // private field
-//
 func (k Key) MarshalJSON() ([]byte, error) {
 	return json.Marshal(k.str)
 }

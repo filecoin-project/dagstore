@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/url"
 	"os"
@@ -37,7 +36,7 @@ func TestUpgrade(t *testing.T) {
 				return &FileMount{"../" + testdata.RootPathCarV1}
 			},
 			verify: func(t *testing.T, u *Upgrader, key string, rootDir string) {
-				fs, err := ioutil.ReadDir(rootDir)
+				fs, err := os.ReadDir(rootDir)
 				require.NoError(t, err)
 				require.Empty(t, fs)
 				_, err = os.Stat(u.TransientPath())
@@ -61,7 +60,7 @@ func TestUpgrade(t *testing.T) {
 				tf, err := os.Open(u.TransientPath())
 				require.NoError(t, err)
 				defer tf.Close()
-				bz, err := ioutil.ReadAll(tf)
+				bz, err := io.ReadAll(tf)
 				require.NoError(t, err)
 				require.NoError(t, tf.Close())
 
@@ -69,7 +68,7 @@ func TestUpgrade(t *testing.T) {
 				f, err := os.Open("../" + testdata.RootPathCarV1)
 				require.NoError(t, err)
 				defer f.Close()
-				bz2, err := ioutil.ReadAll(f)
+				bz2, err := io.ReadAll(f)
 				require.NoError(t, err)
 				require.NoError(t, f.Close())
 				require.EqualValues(t, bz, bz2)
@@ -123,14 +122,14 @@ func TestUpgrade(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, rd)
 
-			bz, err := ioutil.ReadAll(rd)
+			bz, err := io.ReadAll(rd)
 			require.NoError(t, err)
 			require.NotEmpty(t, bz)
 			require.NoError(t, rd.Close())
 
 			f, err := os.Open(tcc.expectedContentFilePath)
 			require.NoError(t, err)
-			bz2, err := ioutil.ReadAll(f)
+			bz2, err := io.ReadAll(f)
 			require.NoError(t, err)
 			require.NoError(t, f.Close())
 			require.EqualValues(t, bz2, bz)
@@ -174,7 +173,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 
 	carF, err := os.Open("../" + testdata.RootPathCarV2)
 	require.NoError(t, err)
-	carBytes, err := ioutil.ReadAll(carF)
+	carBytes, err := io.ReadAll(carF)
 	require.NoError(t, err)
 	require.NoError(t, carF.Close())
 
@@ -182,7 +181,7 @@ func TestUpgraderDeduplicatesRemote(t *testing.T) {
 	for _, rd := range readers {
 		rdc := rd
 		grp2.Go(func() error {
-			bz, err := ioutil.ReadAll(rdc)
+			bz, err := io.ReadAll(rdc)
 			if err != nil {
 				return err
 			}
