@@ -2,11 +2,14 @@ package dagstore
 
 import (
 	"context"
+	"io"
 
 	"github.com/filecoin-project/dagstore/index"
+	"github.com/ipfs/go-cid"
 
 	"github.com/ipld/go-car/v2"
 	carindex "github.com/ipld/go-car/v2/index"
+	"github.com/multiformats/go-multicodec"
 	"github.com/multiformats/go-multihash"
 
 	"github.com/filecoin-project/dagstore/mount"
@@ -118,20 +121,44 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 
 	// works for both CARv1 and CARv2.
 	var idx carindex.Index
+	var roots []cid.Cid
+
 	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
 		var err error
+		var headerReader *car.Reader
+
+		headerReader, err = car.NewReader(reader)
+		if err != nil {
+			log.Warnw("initialize: failed to read header for shard", "shard", s.key, "error", err)
+			return err
+		}
+
+		roots, err = headerReader.Roots()
+		if err != nil {
+			log.Warnw("initialize: failed to read roots for shard", "shard", s.key, "error", err)
+			return err
+		}
+
+		if _, err = reader.Seek(0, io.SeekStart); err != nil {
+			log.Warnw("initialize: failed to reset reader for shard", "shard", s.key, "error", err)
+			return err
+		}
+
 		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true), car.StoreIdentityCIDs(true))
 		if err == nil {
 			log.Debugw("initialize: finished generating index for shard", "shard", s.key)
 		} else {
 			log.Warnw("initialize: failed to generate index for shard", "shard", s.key, "error", err)
 		}
+
 		return err
 	})
+
 	if err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to read/generate CAR Index: %w", err)
 		return
 	}
+
 	if err := d.indices.AddFullIndex(s.key, idx); err != nil {
 		_ = d.failShard(s, d.completionCh, "failed to add index for shard: %w", err)
 		return
@@ -140,7 +167,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	// add all cids in the shard to the inverted (cid -> []Shard Keys) index.
 	iterableIdx, ok := idx.(carindex.IterableIndex)
 	if ok {
-		mhIter := &mhIdx{iterableIdx: iterableIdx}
+		mhIter := &mhIdx{roots: roots, iterableIdx: iterableIdx}
 		if err := d.TopLevelIndex.AddMultihashesForShard(ctx, mhIter, s.key); err != nil {
 			log.Errorw("failed to add shard multihashes to the inverted index", "shard", s.key, "error", err)
 		}
@@ -154,12 +181,18 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 // Convenience struct for converting from CAR index.IterableIndex to the
 // iterator required by the dag store inverted index.
 type mhIdx struct {
+	roots       []cid.Cid
 	iterableIdx carindex.IterableIndex
 }
 
 var _ index.MultihashIterator = (*mhIdx)(nil)
 
 func (it *mhIdx) ForEach(fn func(mh multihash.Multihash) error) error {
+	for _, root := range it.roots {
+		if root.Prefix().MhType == uint64(multicodec.Identity) {
+			fn(root.Hash())
+		}
+	}
 	return it.iterableIdx.ForEach(func(mh multihash.Multihash, _ uint64) error {
 		return fn(mh)
 	})
