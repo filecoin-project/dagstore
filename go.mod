@@ -3,7 +3,7 @@ module github.com/filecoin-project/dagstore
 go 1.16
 
 require (
-	github.com/hashicorp/golang-lru v0.5.4
+	github.com/hnlq715/golang-lru v0.3.0
 	github.com/ipfs/go-block-format v0.0.3
 	github.com/ipfs/go-blockservice v0.4.0 // indirect
 	github.com/ipfs/go-cid v0.1.0
@@ -12,7 +12,6 @@ require (
 	github.com/ipfs/go-ipfs-blockstore v1.2.0
 	github.com/ipfs/go-ipfs-blocksutil v0.0.1
 	github.com/ipfs/go-log/v2 v2.3.0
-	github.com/ipfs/go-merkledag v0.6.0 // indirect
 	github.com/ipld/go-car/v2 v2.4.1
 	github.com/libp2p/go-libp2p-core v0.9.0 // indirect
 	github.com/mr-tron/base58 v1.2.0

@@ -101,9 +101,11 @@ func TestReadOnlyBs(t *testing.T) {
 	require.NoError(t, errg.Wait())
 
 	// ------------------------------------------
-	// Now test with a shard selector that rejects everything and ensure we always see errors
+	// Test with a shard selector that returns an error and verify all methods
+	// return the error
+	rejectedErr := errors.New("rejected")
 	fss := func(c cid.Cid, shards []shard.Key) (shard.Key, error) {
-		return shard.Key{}, errors.New("rejected")
+		return shard.Key{}, rejectedErr
 	}
 
 	rbs, err = NewIndexBackedBlockstore(dagst, fss, 10)
@@ -112,19 +114,71 @@ func TestReadOnlyBs(t *testing.T) {
 		c := cid.NewCidV1(cid.Raw, mh)
 
 		has, err := rbs.Has(ctx, c)
-		require.Error(t, err)
+		require.ErrorIs(t, err, rejectedErr)
 		require.False(t, has)
 
 		blk, err := rbs.Get(ctx, c)
-		require.Error(t, err)
+		require.ErrorIs(t, err, rejectedErr)
 		require.Empty(t, blk)
 
 		sz, err := rbs.GetSize(ctx, c)
-		require.Error(t, err)
+		require.ErrorIs(t, err, rejectedErr)
 		require.EqualValues(t, 0, sz)
 
 		return nil
 	})
+
+	// ------------------------------------------
+	// Test with a shard selector that returns ErrNoShardSelected
+	fss = func(c cid.Cid, shards []shard.Key) (shard.Key, error) {
+		return shard.Key{}, ErrNoShardSelected
+	}
+
+	rbs, err = NewIndexBackedBlockstore(dagst, fss, 10)
+	require.NoError(t, err)
+	it.ForEach(func(mh multihash.Multihash, u uint64) error {
+		c := cid.NewCidV1(cid.Raw, mh)
+
+		// Has should return false
+		has, err := rbs.Has(ctx, c)
+		require.NoError(t, err)
+		require.False(t, has)
+
+		// Get should return ErrBlockNotFound
+		blk, err := rbs.Get(ctx, c)
+		require.ErrorIs(t, err, ErrBlockNotFound)
+		require.Empty(t, blk)
+
+		// GetSize should return ErrBlockNotFound
+		sz, err := rbs.GetSize(ctx, c)
+		require.ErrorIs(t, err, ErrBlockNotFound)
+		require.EqualValues(t, 0, sz)
+
+		return nil
+	})
+
+	// ------------------------------------------
+	// Test with a cid that isn't in the shard
+	notFoundCid, err := cid.Parse("bafzbeigai3eoy2ccc7ybwjfz5r3rdxqrinwi4rwytly24tdbh6yk7zslrm")
+	require.NoError(t, err)
+
+	rbs, err = NewIndexBackedBlockstore(dagst, noOpSelector, 10)
+	require.NoError(t, err)
+
+	// Has should return false
+	has, err := rbs.Has(ctx, notFoundCid)
+	require.NoError(t, err)
+	require.False(t, has)
+
+	// Get should return ErrBlockNotFound
+	blk, err := rbs.Get(ctx, notFoundCid)
+	require.ErrorIs(t, err, ErrBlockNotFound)
+	require.Empty(t, blk)
+
+	// GetSize should return ErrBlockNotFound
+	sz, err := rbs.GetSize(ctx, notFoundCid)
+	require.ErrorIs(t, err, ErrBlockNotFound)
+	require.EqualValues(t, 0, sz)
 }
 
 func testRegistry(t *testing.T) *mount.Registry {
