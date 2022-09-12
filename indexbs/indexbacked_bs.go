@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/filecoin-project/dagstore"
 	"github.com/filecoin-project/dagstore/shard"
-	lru "github.com/hnlq715/golang-lru"
+	lru "github.com/hashicorp/golang-lru"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
@@ -40,7 +38,6 @@ type IndexBackedBlockstore struct {
 	d            dagstore.Interface
 	shardSelectF ShardSelectorF
 
-	bsStripedLocks [256]sync.Mutex
 	// caches the blockstore for a given shard for shard read affinity
 	// i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
 	blockstoreCache *lru.Cache
@@ -128,21 +125,26 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 	// Do we have a cached blockstore for a shard containing the required block?
 	// If so, call op on the cached blockstore.
 	for _, sk := range shards {
-		// Use a striped lock to synchronize between this code that gets from
-		// the cache and the code below that adds to the cache
-		lk := &ro.bsStripedLocks[shardKeyToStriped(sk)]
-		lk.Lock()
-		res, err := ro.readFromBSCacheUnlocked(ctx, c, sk, op)
-		lk.Unlock()
-		if err == nil {
-			// Found a cached shard blockstore containing the required block,
-			// and successfully called the blockstore op
-			return res, nil
+		// Get the shard's blockstore from the cache
+		val, ok := ro.blockstoreCache.Get(sk)
+		if ok {
+			accessor := val.(*accessorWithBlockstore)
+			res, err := execOpOnBlockstore(ctx, c, sk, accessor.bs, op)
+			if err == nil {
+				// Found a cached shard blockstore containing the required block,
+				// and successfully called the blockstore op
+				return res, nil
+			}
 		}
 	}
 
-	// We don't have a cached blockstore for a shard that contains the block.
-	// Let's build one.
+	// We weren't able to get the block which means that either
+	// 1. There is no cached blockstore for a shard that contains the block
+	// 2. There was an error trying to get the block from the existing cached
+	//    blockstore.
+	//    ShardsContainingMultihash indicated that the shard has the block, so
+	//    if there was an error getting it, it means there is something wrong.
+	// So in either case we should create a new blockstore for the shard.
 
 	// Use the shard select function to select one of the shards with the block
 	sk, err := ro.shardSelectF(c, shards)
@@ -154,20 +156,9 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 		return nil, fmt.Errorf("failed to run shard selection function: %w", err)
 	}
 
-	// Synchronize between the code above that gets a blockstore from the cache
-	// and the code below that adds a blockstore to the cache
-	lk := &ro.bsStripedLocks[shardKeyToStriped(sk)]
-	lk.Lock()
-	defer lk.Unlock()
-
-	// Check if another thread already added the shard's blockstore to the
-	// cache while this thread was waiting to obtain the lock
-	res, err := ro.readFromBSCacheUnlocked(ctx, c, sk, op)
-	if err == nil {
-		return res, nil
-	}
-
-	// Load the blockstore for the selected shard
+	// Load the blockstore for the selected shard.
+	// Note that internally the DAG store will synchronize multiple concurrent
+	// acquires for the same shard.
 	resch := make(chan dagstore.ShardResult, 1)
 	if err := ro.d.AcquireShard(ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
 		return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
@@ -188,42 +179,13 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 		return nil, fmt.Errorf("failed to load read-only blockstore for shard %s: %w", sk, err)
 	}
 
-	// Call the operation on the blockstore
-	res, err = execOpOnBlockstore(ctx, c, sk, bs, op)
-	if err != nil {
-		return nil, err
-	}
-
-	// Update the blockstore cache
+	// Add the blockstore to the cache
 	ro.blockstoreCache.Add(sk, &accessorWithBlockstore{sa, bs})
 
 	logbs.Debugw("Added new blockstore to cache", "cid", c, "shard", sk)
-	return res, nil
-}
 
-func (ro *IndexBackedBlockstore) readFromBSCacheUnlocked(ctx context.Context, c cid.Cid, shardContainingCid shard.Key, op BlockstoreOp) (*opRes, error) {
-	// Get the shard's blockstore from the cache
-	val, ok := ro.blockstoreCache.Get(shardContainingCid)
-	if !ok {
-		return nil, ErrBlockNotFound
-	}
-
-	accessor := val.(*accessorWithBlockstore)
-	res, err := execOpOnBlockstore(ctx, c, shardContainingCid, accessor.bs, op)
-	if err == nil {
-		return res, nil
-	}
-
-	// We know that the cid we want to lookup belongs to a shard with key `sk` and
-	// so if we fail to get the corresponding block from the blockstore for that shard,
-	// something has gone wrong and we should remove the blockstore for that shard from our cache.
-	// However there may be several calls from different threads waiting to acquire
-	// the blockstore from the cache, so to prevent flapping, set a short expiry on the
-	// cache key instead of removing it immediately.
-	logbs.Warnf("expected blockstore for shard %s to contain cid %s (multihash %s) but it did not",
-		shardContainingCid, c, c.Hash())
-	ro.blockstoreCache.AddEx(shardContainingCid, accessor, time.Second)
-	return nil, err
+	// Call the operation on the blockstore
+	return execOpOnBlockstore(ctx, c, sk, bs, op)
 }
 
 func execOpOnBlockstore(ctx context.Context, c cid.Cid, sk shard.Key, bs dagstore.ReadBlockstore, op BlockstoreOp) (*opRes, error) {
@@ -239,12 +201,6 @@ func execOpOnBlockstore(ctx context.Context, c cid.Cid, sk shard.Key, bs dagstor
 		return nil, fmt.Errorf("failed to call blockstore.%s for shard %s: %w", op, sk, err)
 	}
 	return &res, nil
-}
-
-func shardKeyToStriped(sk shard.Key) byte {
-	// The shard key is typically a cid, so the last byte should be random.
-	// Use the last byte as as the striped lock index.
-	return sk.String()[len(sk.String())-1]
 }
 
 func (ro *IndexBackedBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
