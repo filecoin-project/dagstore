@@ -13,6 +13,8 @@ import (
 	"github.com/ipfs/go-datastore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	logging "github.com/ipfs/go-log/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var logbs = logging.Logger("dagstore/idxbs")
@@ -41,9 +43,11 @@ type IndexBackedBlockstore struct {
 	// caches the blockstore for a given shard for shard read affinity
 	// i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
 	blockstoreCache *lru.Cache
+
+	tracer trace.Tracer
 }
 
-func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
+func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int, t trace.Tracer) (blockstore.Blockstore, error) {
 	// instantiate the blockstore cache
 	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
 		// ensure we close the blockstore for a shard when it's evicted from the cache so dagstore can gc it.
@@ -58,6 +62,7 @@ func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF
 		d:               d,
 		shardSelectF:    shardSelector,
 		blockstoreCache: bslru,
+		tracer:          t,
 	}, nil
 }
 
@@ -109,6 +114,14 @@ func (ro *IndexBackedBlockstore) execOpWithLogs(ctx context.Context, c cid.Cid, 
 }
 
 func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op BlockstoreOp) (*opRes, error) {
+	var span trace.Span
+	if ro.tracer != nil {
+		ctx, span = ro.tracer.Start(ctx, "ibb.execOp")
+		defer span.End()
+		span.SetAttributes(attribute.String("cid", c.String()))
+		span.SetAttributes(attribute.String("op", op.String()))
+	}
+
 	// Fetch all the shards containing the multihash
 	shards, err := ro.d.ShardsContainingMultihash(ctx, c.Hash())
 	if err != nil {
@@ -128,13 +141,22 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 		// Get the shard's blockstore from the cache
 		val, ok := ro.blockstoreCache.Get(sk)
 		if ok {
+			var span2 trace.Span
+			if ro.tracer != nil {
+				ctx, span2 = ro.tracer.Start(ctx, "ibb.execOpOnBlockstore")
+				span2.SetAttributes(attribute.String("cid", c.String()))
+				span2.SetAttributes(attribute.String("op", op.String()))
+			}
+
 			accessor := val.(*accessorWithBlockstore)
 			res, err := execOpOnBlockstore(ctx, c, sk, accessor.bs, op)
 			if err == nil {
+				span2.End()
 				// Found a cached shard blockstore containing the required block,
 				// and successfully called the blockstore op
 				return res, nil
 			}
+			span2.End()
 		}
 	}
 
@@ -159,6 +181,14 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 	// Load the blockstore for the selected shard.
 	// Note that internally the DAG store will synchronize multiple concurrent
 	// acquires for the same shard.
+
+	var span3 trace.Span
+	if ro.tracer != nil {
+		ctx, span3 = ro.tracer.Start(ctx, "ibb.acquireShard")
+		defer span3.End()
+		span3.SetAttributes(attribute.String("cid", c.String()))
+	}
+
 	resch := make(chan dagstore.ShardResult, 1)
 	if err := ro.d.AcquireShard(ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
 		return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
@@ -172,6 +202,8 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 			return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, shres.Error)
 		}
 	}
+
+	span3.End()
 
 	sa := shres.Accessor
 	bs, err := sa.Blockstore()
