@@ -148,7 +148,7 @@ func (d *DAGStore) control() {
 			var span2 trace.Span
 			if d.tracer != nil {
 				d.ctx, span2 = d.tracer.Start(d.ctx, "dagstore.control.op-shard-acquire")
-				span.SetAttributes(attribute.String("shardkey", tsk.shard.key))
+				span.SetAttributes(attribute.String("shardkey", tsk.shard.key.String()))
 			}
 
 			// if the shard is errored, fail the acquire immediately.
