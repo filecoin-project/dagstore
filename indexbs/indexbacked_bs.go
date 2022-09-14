@@ -156,6 +156,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 				// and successfully called the blockstore op
 				return res, nil
 			}
+			span2.SetAttributes(attribute.String("err", err.Error()))
 			span2.End()
 		}
 	}
