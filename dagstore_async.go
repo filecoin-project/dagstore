@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/filecoin-project/dagstore/index"
+	trace "go.opentelemetry.io/otel/trace"
 
 	"github.com/ipld/go-car/v2"
 	carindex "github.com/ipld/go-car/v2/index"
@@ -22,7 +23,14 @@ import (
 func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mount.Mount) {
 	k := s.key
 
+	var span trace.Span
+	if d.tracer != nil {
+		w.ctx, span = d.tracer.Start(w.ctx, "dagstore.acquireAsync.fetch")
+	}
+
 	reader, err := mnt.Fetch(ctx)
+
+	span.End()
 
 	if err := ctx.Err(); err != nil {
 		log.Warnw("context cancelled while fetching shard; releasing", "shard", s.key, "error", err)
@@ -52,8 +60,15 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	log.Debugw("acquire: successfully fetched from mount upgrader", "shard", s.key)
 
+	var span2 trace.Span
+	if d.tracer != nil {
+		w.ctx, span2 = d.tracer.Start(w.ctx, "dagstore.acquireAsync.getfullindex")
+	}
+
 	// acquire the index.
 	idx, err := d.indices.GetFullIndex(k)
+
+	span2.End()
 
 	if err := ctx.Err(); err != nil {
 		log.Warnw("context cancelled while indexing shard; releasing", "shard", s.key, "error", err)
