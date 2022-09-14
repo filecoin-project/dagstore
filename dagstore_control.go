@@ -67,7 +67,7 @@ func (d *DAGStore) control() {
 		var span trace.Span
 		if d.tracer != nil {
 			d.ctx, span = d.tracer.Start(d.ctx, "dagstore.control.consumeNext")
-			span.SetAttributes(attribute.String("shardkey", tsk.shard.key))
+			span.SetAttributes(attribute.String("shardkey", tsk.shard.key.String()))
 		}
 
 		s.lk.Lock()
