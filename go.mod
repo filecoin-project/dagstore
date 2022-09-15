@@ -20,6 +20,8 @@ require (
 	github.com/stretchr/testify v1.7.1
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/whyrusleeping/cbor-gen v0.0.0-20200123233031-1cdf64d27158
+	go.opentelemetry.io/otel v1.7.0
+	go.opentelemetry.io/otel/trace v1.7.0
 	golang.org/x/exp v0.0.0-20210714144626-1041f73d31d8
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
