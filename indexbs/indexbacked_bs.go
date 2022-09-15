@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/filecoin-project/dagstore"
 	"github.com/filecoin-project/dagstore/shard"
@@ -30,11 +31,6 @@ var ErrNoShardSelected = errors.New("no shard selected")
 // It should return `ErrNoShardSelected` if none of the given shard is selected.
 type ShardSelectorF func(c cid.Cid, shards []shard.Key) (shard.Key, error)
 
-type accessorWithBlockstore struct {
-	sa *dagstore.ShardAccessor
-	bs dagstore.ReadBlockstore
-}
-
 // IndexBackedBlockstore is a read only blockstore over all cids across all shards in the dagstore.
 type IndexBackedBlockstore struct {
 	d            dagstore.Interface
@@ -42,27 +38,22 @@ type IndexBackedBlockstore struct {
 
 	// caches the blockstore for a given shard for shard read affinity
 	// i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
-	blockstoreCache *lru.Cache
+	bsCache *blockstoreCache
 
 	tracer trace.Tracer
 }
 
 func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int, t trace.Tracer) (blockstore.Blockstore, error) {
-	// instantiate the blockstore cache
-	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
-		// ensure we close the blockstore for a shard when it's evicted from the cache so dagstore can gc it.
-		abs := val.(*accessorWithBlockstore)
-		abs.sa.Close()
-	})
+	cache, err := newBlockstoreCache(maxCacheSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create lru cache for read only blockstores")
+		return nil, err
 	}
 
 	return &IndexBackedBlockstore{
-		d:               d,
-		shardSelectF:    shardSelector,
-		blockstoreCache: bslru,
-		tracer:          t,
+		d:            d,
+		shardSelectF: shardSelector,
+		bsCache:      cache,
+		tracer:       t,
 	}, nil
 }
 
@@ -139,7 +130,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 	// If so, call op on the cached blockstore.
 	for _, sk := range shards {
 		// Get the shard's blockstore from the cache
-		val, ok := ro.blockstoreCache.Get(sk)
+		abs, ok := ro.bsCache.Get(sk)
 		if ok {
 			var span2 trace.Span
 			if ro.tracer != nil {
@@ -148,8 +139,8 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 				span2.SetAttributes(attribute.String("op", op.String()))
 			}
 
-			accessor := val.(*accessorWithBlockstore)
-			res, err := execOpOnBlockstore(ctx, c, sk, accessor.bs, op)
+			res, err := execOpOnBlockstore(ctx, c, sk, abs.bs, op)
+			abs.close()
 			if err == nil {
 				span2.End()
 				// Found a cached shard blockstore containing the required block,
@@ -213,7 +204,9 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 	}
 
 	// Add the blockstore to the cache
-	ro.blockstoreCache.Add(sk, &accessorWithBlockstore{sa, bs})
+	abs := &accessorWithBlockstore{sa: sa, bs: bs}
+	ro.bsCache.Add(sk, abs)
+	defer abs.close()
 
 	logbs.Debugw("Added new blockstore to cache", "cid", c, "shard", sk)
 
@@ -280,4 +273,103 @@ func (ro *IndexBackedBlockstore) PutMany(context.Context, []blocks.Block) error 
 }
 func (ro *IndexBackedBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, error) {
 	return nil, errors.New("unsupported operation AllKeysChan")
+}
+
+type blockstoreCache struct {
+	lk    sync.Mutex
+	cache *lru.Cache
+}
+
+func newBlockstoreCache(size int) (*blockstoreCache, error) {
+	bslru, err := lru.NewWithEvict(size, func(_ interface{}, val interface{}) {
+		abs := val.(*accessorWithBlockstore)
+		abs.evict()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create lru cache for read only blockstores: %w", err)
+	}
+
+	return &blockstoreCache{cache: bslru}, nil
+}
+
+func (bc *blockstoreCache) Get(sk shard.Key) (*accessorWithBlockstore, bool) {
+	bc.lk.Lock()
+	defer bc.lk.Unlock()
+
+	// Get the accessor from the cache
+	absi, ok := bc.cache.Get(sk)
+	if !ok {
+		return nil, false
+	}
+
+	// Increment the accessor's ref count so that the blockstore
+	// will not be closed until the caller is finished with it
+	abs := absi.(*accessorWithBlockstore)
+	abs.incRefCount()
+	return abs, true
+}
+
+func (bc *blockstoreCache) Add(sk shard.Key, abs *accessorWithBlockstore) {
+	bc.lk.Lock()
+	defer bc.lk.Unlock()
+
+	// Check if we're replacing an existing accessor with this Add
+	absi, ok := bc.cache.Get(sk)
+	if ok {
+		// Mark the existing accessor as evicted so that its blockstore can be
+		// closed once all callers are done with the blockstore
+		abs := absi.(*accessorWithBlockstore)
+		abs.evict()
+	}
+
+	// Add the new accessor
+	bc.cache.Add(sk, abs)
+	abs.incRefCount()
+}
+
+type accessorWithBlockstore struct {
+	sa *dagstore.ShardAccessor
+	bs dagstore.ReadBlockstore
+
+	lk       sync.Mutex
+	evicted  bool
+	refCount int
+}
+
+func (abs *accessorWithBlockstore) incRefCount() {
+	abs.lk.Lock()
+	defer abs.lk.Unlock()
+
+	abs.refCount++
+}
+
+func (abs *accessorWithBlockstore) close() {
+	abs.lk.Lock()
+	defer abs.lk.Unlock()
+
+	abs.refCount--
+	if abs.refCount == 0 && abs.evicted {
+		// The blockstore has already been evicted, and this was the last
+		// reference to it, so close the blockstore so that dagstore can GC it
+		err := abs.sa.Close()
+		if err != nil {
+			logbs.Warnf("error closing blockstore: %w", err)
+		}
+	}
+}
+
+func (abs *accessorWithBlockstore) evict() {
+	abs.lk.Lock()
+	defer abs.lk.Unlock()
+
+	abs.evicted = true
+
+	if abs.refCount == 0 {
+		// There are no more references to the blockstore; close it so that the
+		// dagstore can GC it
+		err := abs.sa.Close()
+		if err != nil {
+			logbs.Warnf("error closing blockstore: %w", err)
+		}
+	}
 }
