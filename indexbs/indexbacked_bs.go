@@ -42,6 +42,7 @@ type blockstoreAcquire struct {
 
 // IndexBackedBlockstore is a read only blockstore over all cids across all shards in the dagstore.
 type IndexBackedBlockstore struct {
+	ctx          context.Context
 	d            dagstore.Interface
 	shardSelectF ShardSelectorF
 
@@ -52,10 +53,13 @@ type IndexBackedBlockstore struct {
 	bsAcquireByShard sync.Map
 }
 
-func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
+func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
 	// instantiate the blockstore cache
 	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
-		// ensure we close the blockstore for a shard when it's evicted from the cache so dagstore can gc it.
+		// Ensure we close the blockstore for a shard when it's evicted from
+		// the cache so dagstore can gc it.
+		// TODO: add reference counting mechanism so that the blockstore does
+		// not get closed while there is an operation still in progress against it
 		abs := val.(*accessorWithBlockstore)
 		abs.sa.Close()
 	})
@@ -64,6 +68,7 @@ func NewIndexBackedBlockstore(d dagstore.Interface, shardSelector ShardSelectorF
 	}
 
 	return &IndexBackedBlockstore{
+		ctx:             ctx,
 		d:               d,
 		shardSelectF:    shardSelector,
 		blockstoreCache: bslru,
@@ -180,7 +185,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 
 			// Acquire the blockstore for the selected shard
 			resch := make(chan dagstore.ShardResult, 1)
-			if err := ro.d.AcquireShard(ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
+			if err := ro.d.AcquireShard(ro.ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
 				return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
 			}
 			var shres dagstore.ShardResult
