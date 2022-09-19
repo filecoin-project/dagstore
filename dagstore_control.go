@@ -313,9 +313,9 @@ func (d *DAGStore) control() {
 
 		}
 
-		// persist the current shard state. Skip if key not found(destroyShard). Otherwise, it
+		// persist the current shard state. Skip if op is OpShardDestroy. Otherwise, it
 		// re-registers the shard
-		if _, ok := d.shards[s.key]; ok {
+		if tsk.op != OpShardDestroy {
 			if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
 				log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 			}
