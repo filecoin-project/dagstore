@@ -3,6 +3,8 @@ package dagstore
 import (
 	"context"
 	"fmt"
+
+	"github.com/ipfs/go-datastore"
 )
 
 type OpType int
@@ -297,6 +299,11 @@ func (d *DAGStore) control() {
 
 			d.lk.Lock()
 			delete(d.shards, s.key)
+
+			// Delete the entry directly from the datastore as persis does not implement deletion
+			// Implementing delete in persist will require a new state for deletion and relative action
+			// Persist should not make any changes for the control_loop runs for deletion
+			d.store.Delete(d.ctx, datastore.NewKey(s.key.String()))
 			d.lk.Unlock()
 			res := &ShardResult{Key: s.key, Error: nil}
 			d.dispatchResult(res, tsk.waiter)
