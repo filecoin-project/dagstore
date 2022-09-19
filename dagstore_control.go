@@ -300,12 +300,11 @@ func (d *DAGStore) control() {
 			d.lk.Lock()
 			delete(d.shards, s.key)
 
-			// Delete the entry directly from the datastore as persis does not implement deletion
-			// Implementing delete in persist will require a new state for deletion and relative action
+			// Delete the entry directly from the datastore as persist does not implement deletion
 			// Persist should not make any changes for the control_loop runs for deletion
-			d.store.Delete(d.ctx, datastore.NewKey(s.key.String()))
+			err = d.store.Delete(d.ctx, datastore.NewKey(s.key.String()))
 			d.lk.Unlock()
-			res := &ShardResult{Key: s.key, Error: nil}
+			res := &ShardResult{Key: s.key, Error: err}
 			d.dispatchResult(res, tsk.waiter)
 			// TODO are we guaranteed that there are no queued items for this shard?
 
@@ -314,9 +313,12 @@ func (d *DAGStore) control() {
 
 		}
 
-		// persist the current shard state.
-		if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
-			log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+		// persist the current shard state. Skip if key not found(destroyShard). Otherwise, it
+		// re-registers the shard
+		if _, ok := d.shards[s.key]; ok {
+			if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
+				log.Warnw("failed to persist shard", "shard", s.key, "error", err)
+			}
 		}
 
 		// send a notification if the user provided a notification channel.
