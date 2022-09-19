@@ -3,6 +3,9 @@ package dagstore
 import (
 	"context"
 	"fmt"
+
+	"go.opentelemetry.io/otel/attribute"
+	trace "go.opentelemetry.io/otel/trace"
 )
 
 type OpType int
@@ -60,6 +63,12 @@ func (d *DAGStore) control() {
 
 		s := tsk.shard
 		log.Debugw("processing task", "op", tsk.op, "shard", tsk.shard.key, "error", tsk.err)
+
+		var span trace.Span
+		if d.tracer != nil {
+			d.ctx, span = d.tracer.Start(d.ctx, "dagstore.control.consumeNext")
+			span.SetAttributes(attribute.String("shardkey", tsk.shard.key.String()))
+		}
 
 		s.lk.Lock()
 		prevState := s.state
@@ -136,6 +145,12 @@ func (d *DAGStore) control() {
 			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
 			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
 
+			var span2 trace.Span
+			if d.tracer != nil {
+				d.ctx, span2 = d.tracer.Start(d.ctx, "dagstore.control.op-shard-acquire")
+				span.SetAttributes(attribute.String("shardkey", tsk.shard.key.String()))
+			}
+
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
 				if s.recoverOnNextAcquire {
@@ -185,6 +200,8 @@ func (d *DAGStore) control() {
 			// to the event loop if it fails to acquire the shard.
 			s.refs++
 			go d.acquireAsync(tsk.ctx, w, s, s.mount)
+
+			span2.End()
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
@@ -331,6 +348,10 @@ func (d *DAGStore) control() {
 		log.Debugw("finished processing task", "op", tsk.op, "shard", tsk.shard.key, "prev_state", prevState, "curr_state", s.state, "error", tsk.err)
 
 		s.lk.Unlock()
+
+		if d.tracer != nil {
+			span.End()
+		}
 	}
 }
 

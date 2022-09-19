@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	mh "github.com/multiformats/go-multihash"
+	trace "go.opentelemetry.io/otel/trace"
 
 	carindex "github.com/ipld/go-car/v2/index"
 
@@ -73,6 +74,8 @@ type DAGStore struct {
 	config  Config
 	indices index.FullIndexRepo
 	store   ds.Datastore
+
+	tracer trace.Tracer
 
 	// TopLevelIndex is the top level (cid -> []shards) index that maps a cid to all the shards that is present in.
 	TopLevelIndex index.Inverted
@@ -162,6 +165,8 @@ type Config struct {
 	// loop block.
 	TraceCh chan<- Trace
 
+	Tracer trace.Tracer
+
 	// FailureCh is a channel to be notified every time that a shard moves to
 	// ShardStateErrored. A nil value will send no failure notifications.
 	// Failure events can be used to evaluate the error and call
@@ -240,6 +245,8 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		throttleReaadyFetch: throttle.Noop(),
 		ctx:                 ctx,
 		cancelFn:            cancel,
+
+		tracer: cfg.Tracer,
 	}
 
 	if max := cfg.MaxConcurrentIndex; max > 0 {
@@ -433,6 +440,12 @@ type AcquireOpts struct {
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
 func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
+	var span trace.Span
+	if d.tracer != nil {
+		ctx, span = d.tracer.Start(ctx, "dagstore.acquireShard")
+		defer span.End()
+	}
+
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
