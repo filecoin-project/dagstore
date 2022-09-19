@@ -228,7 +228,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 
 			// Acquire the blockstore for the selected shard
 			resch := make(chan dagstore.ShardResult, 1)
-			if err := ro.d.AcquireShard(ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
+			if err := ro.d.AcquireShard(context.Background(), sk, resch, dagstore.AcquireOpts{}); err != nil {
 				return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
 			}
 			var shres dagstore.ShardResult
