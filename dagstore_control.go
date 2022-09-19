@@ -302,9 +302,6 @@ func (d *DAGStore) control() {
 
 			// Delete the entry directly from the datastore as persist does not implement deletion
 			// Persist should not make any changes for the control_loop runs for deletion
-			if err := d.store.Delete(d.ctx, datastore.NewKey(s.key.String())); err != nil {
-				log.Errorw("DestroyShard: failed to delete shard from database", "shard", s.key, "error", err)
-			}
 			d.lk.Unlock()
 			res := &ShardResult{Key: s.key, Error: err}
 			d.dispatchResult(res, tsk.waiter)
@@ -317,7 +314,11 @@ func (d *DAGStore) control() {
 
 		// persist the current shard state. Skip if op is OpShardDestroy. Otherwise, it
 		// re-registers the shard
-		if tsk.op != OpShardDestroy {
+		if tsk.op == OpShardDestroy {
+			if err := d.store.Delete(d.ctx, datastore.NewKey(s.key.String())); err != nil {
+				log.Errorw("DestroyShard: failed to delete shard from database", "shard", s.key, "error", err)
+			}
+		} else {
 			if err := s.persist(d.ctx, d.config.Datastore); err != nil { // TODO maybe fail shard?
 				log.Warnw("failed to persist shard", "shard", s.key, "error", err)
 			}
