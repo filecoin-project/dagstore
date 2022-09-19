@@ -300,10 +300,9 @@ func (d *DAGStore) control() {
 			d.lk.Lock()
 			delete(d.shards, s.key)
 
-			// Delete the entry directly from the datastore as persist does not implement deletion
-			// Persist should not make any changes for the control_loop runs for deletion
+			// Perform on-disk delete after the switch statement. This is only in-memory delete.
 			d.lk.Unlock()
-			res := &ShardResult{Key: s.key, Error: err}
+			res := &ShardResult{Key: s.key, Error: nil}
 			d.dispatchResult(res, tsk.waiter)
 			// TODO are we guaranteed that there are no queued items for this shard?
 
@@ -312,8 +311,7 @@ func (d *DAGStore) control() {
 
 		}
 
-		// persist the current shard state. Skip if op is OpShardDestroy. Otherwise, it
-		// re-registers the shard
+		// persist the current shard state. If Op is OpShardDestroy then delete directly from DB.
 		if tsk.op == OpShardDestroy {
 			if err := d.store.Delete(d.ctx, datastore.NewKey(s.key.String())); err != nil {
 				log.Errorw("DestroyShard: failed to delete shard from database", "shard", s.key, "error", err)
