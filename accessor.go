@@ -54,6 +54,10 @@ func (sa *ShardAccessor) Shard() shard.Key {
 	return sa.shard.key
 }
 
+func (sa *ShardAccessor) Reader() io.ReadCloser {
+	return sa.data.(io.ReadCloser)
+}
+
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
 	var r io.ReaderAt = sa.data
 
