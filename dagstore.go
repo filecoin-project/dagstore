@@ -489,14 +489,14 @@ func (d *DAGStore) Start(ctx context.Context) error {
 	// release the queued registrations before we return.
 	for _, s := range toRegister {
 		if err := queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
-			return fmt.Errorf("failed to queue task for shard %s: %w", s, err)
+			return fmt.Errorf("failed to queue task for shard %s: %w", s.key, err)
 		}
 	}
 
 	// queue shard recovery for shards in the errored state before we return.
 	for _, s := range toRecover {
 		if err := queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
-			return fmt.Errorf("failed to queue task for shard %s: %w", s, err)
+			return fmt.Errorf("failed to queue task for shard %s: %w", s.key, err)
 		}
 	}
 
