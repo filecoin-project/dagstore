@@ -49,6 +49,8 @@ type Shard struct {
 
 	recoverOnNextAcquire bool // a shard marked in error state during initialization can be recovered on its first acquire.
 
+	fetchOnNextAcquire bool // a shard marked in initialising state during dag store startup can be fetched on its first acquire.
+
 	// Waiters.
 	wRegister *waiter   // waiter for registration result.
 	wRecover  *waiter   // waiter for recovering an errored shard.

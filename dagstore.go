@@ -50,6 +50,15 @@ const (
 	RecoverNow
 )
 
+// FetchOnStartPolicy specifies the policy that determines if a registered shard
+// whose index is absent should be fetched on start.
+type FetchOnStartPolicy int
+
+const (
+	FetchNow FetchOnStartPolicy = iota
+	FetchOnAcquire
+)
+
 var log = logging.Logger("dagstore")
 
 var (
@@ -262,6 +271,8 @@ type Config struct {
 
 	// AutomatedGCConfig specifies the confguration parameters to use for the Automated GC.
 	AutomatedGCConfig *AutomatedGCConfig
+
+	FetchOnStart FetchOnStartPolicy
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -432,6 +443,10 @@ func (d *DAGStore) Start(ctx context.Context) error {
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
+				if d.config.FetchOnStart == FetchOnAcquire {
+					s.fetchOnNextAcquire = true
+				}
+
 				// reset back to new, and queue the OpShardRegister.
 				s.state = ShardStateNew
 				toRegister = append(toRegister, s)
@@ -460,14 +475,29 @@ func (d *DAGStore) Start(ctx context.Context) error {
 		go d.dispatcher(d.dispatchFailuresCh)
 	}
 
+	queueTask := func(tsk *task, ch chan<- *task) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-d.ctx.Done():
+			return d.ctx.Err()
+		case ch <- tsk:
+			return nil
+		}
+	}
+
 	// release the queued registrations before we return.
 	for _, s := range toRegister {
-		_ = d.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
+		if err := queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
+			return fmt.Errorf("failed to queue task for shard %s: %w", s, err)
+		}
 	}
 
 	// queue shard recovery for shards in the errored state before we return.
 	for _, s := range toRecover {
-		_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
+		if err := queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
+			return fmt.Errorf("failed to queue task for shard %s: %w", s, err)
+		}
 	}
 
 	return nil

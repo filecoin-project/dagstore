@@ -98,6 +98,12 @@ func (d *DAGStore) control() {
 				break
 			}
 
+			// skip init if this was a restart and we should fetch the shard on the next acquire
+			if s.fetchOnNextAcquire {
+				log.Infow("shard registered with lazy initialization", "shard", s.key)
+				break
+			}
+
 			// otherwise, park the registration channel and queue the init.
 			s.wRegister = tsk.waiter
 			_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: tsk.waiter}, d.internalCh)
