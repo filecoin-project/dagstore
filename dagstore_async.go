@@ -28,7 +28,8 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 		w.ctx, span = d.tracer.Start(w.ctx, "dagstore.acquireAsync.fetch")
 	}
 
-	reader, err := mnt.Fetch(ctx)
+	rr, err := mnt.Fetch(ctx)
+	reader := NewBufferedReader(rr, 64000)
 
 	span.End()
 
@@ -120,14 +121,16 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 // initializeShard initializes a shard asynchronously by fetching its data and
 // performing indexing.
 func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Mount) {
-	reader, err := mnt.Fetch(ctx)
+	rr, err := mnt.Fetch(ctx)
 	if err != nil {
 		log.Warnw("initialize: failed to fetch from mount upgrader", "shard", s.key, "error", err)
 
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
 		return
 	}
-	defer reader.Close()
+
+	reader := NewBufferedReader(rr, 64000)
+	defer rr.Close()
 
 	log.Debugw("initialize: successfully fetched from mount upgrader", "shard", s.key)
 
