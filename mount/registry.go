@@ -22,12 +22,12 @@ var (
 type Registry struct {
 	lk       sync.RWMutex
 	byScheme map[string]Mount
-	byType   map[reflect.Type]string
+	byType   map[string]string
 }
 
 // NewRegistry constructs a blank registry.
 func NewRegistry() *Registry {
-	return &Registry{byScheme: map[string]Mount{}, byType: map[reflect.Type]string{}}
+	return &Registry{byScheme: map[string]Mount{}, byType: map[string]string{}}
 }
 
 // Register adds a new mount type to the registry under the specified scheme.
@@ -44,12 +44,12 @@ func (r *Registry) Register(scheme string, template Mount) error {
 		return fmt.Errorf("mount already registered for scheme: %s", scheme)
 	}
 
-	if _, ok := r.byType[reflect.TypeOf(template)]; ok {
+	if _, ok := r.byType[reflect.TypeOf(template).String()]; ok {
 		return fmt.Errorf("mount already registered for type: %T", template)
 	}
 
 	r.byScheme[scheme] = template
-	r.byType[reflect.TypeOf(template)] = scheme
+	r.byType[reflect.TypeOf(template).String()] = scheme
 	return nil
 }
 
@@ -88,7 +88,7 @@ func (r *Registry) Represent(mount Mount) (*url.URL, error) {
 		mount = up.underlying
 	}
 
-	scheme, ok := r.byType[reflect.TypeOf(mount)]
+	scheme, ok := r.byType[reflect.TypeOf(mount).String()]
 	if !ok {
 		return nil, fmt.Errorf("failed to represent mount with type %T: %w", mount, ErrUnrecognizedType)
 	}
