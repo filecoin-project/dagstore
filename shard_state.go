@@ -43,7 +43,7 @@ func (ss ShardState) String() string {
 		ShardStateErrored:      "ShardStateErrored",
 		ShardStateUnknown:      "ShardStateUnknown",
 	}
-	if ss < 0 || int(ss) >= len(strs) {
+	if int(ss) >= len(strs) {
 		// safety comes first.
 		return "__undefined__"
 	}

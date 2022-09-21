@@ -125,7 +125,6 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		if u.onceErr != nil {
 			return
 		}
-		defer partial.Close()
 
 		// do the refetch; abort and remove/reset the partial if it fails.
 		// perform outside the lock as this is a long-running operation.
@@ -133,6 +132,7 @@ func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
 		// and it's only read after it finishes.
 
 		u.onceErr = u.refetch(ctx, partial)
+		partial.Close()
 		if u.onceErr != nil {
 			log.Warnw("failed to refetch", "shard", u.key, "error", u.onceErr)
 			if err := os.Remove(u.pathPartial); err != nil {

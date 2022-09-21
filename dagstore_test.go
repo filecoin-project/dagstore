@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -94,6 +95,10 @@ func TestDestroyShard(t *testing.T) {
 
 	info := dagst.AllShardsInfo()
 	require.Equal(t, 1, len(info))
+
+	// clean up active shard
+	require.NotNil(t, res.Accessor)
+	require.NoError(t, res.Accessor.Close())
 }
 
 func TestDestroyAcrossRestart(t *testing.T) {
@@ -418,6 +423,10 @@ func TestConcurrentAcquires(t *testing.T) {
 }
 
 func TestRestartRestoresState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release open shard resource on dagstore close")
+	}
+
 	dir := t.TempDir()
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
 	idx, err := index.NewFSRepo(t.TempDir())
@@ -484,6 +493,10 @@ func TestRestartRestoresState(t *testing.T) {
 }
 
 func TestRestartResumesRegistration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release open shard resource on dagstore close")
+	}
+
 	dir := t.TempDir()
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
 	r := testRegistry(t)
@@ -600,6 +613,10 @@ func TestRestartResumesRegistration(t *testing.T) {
 }
 
 func TestGC(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release open shard resource on dagstore close")
+	}
+
 	dir := t.TempDir()
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
@@ -679,6 +696,10 @@ func TestOrphansRemovedOnStartup(t *testing.T) {
 // TestLazyInitialization tests that lazy initialization initializes shards on
 // their first acquisition.
 func TestLazyInitialization(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release open shard resource on dagstore close")
+	}
+
 	dir := t.TempDir()
 	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
 	sink := tracer(128)
@@ -727,6 +748,10 @@ func TestLazyInitialization(t *testing.T) {
 // TestThrottleFetch exercises and tests the fetch concurrency limitation.
 // Testing thottling on indexing is way harder...
 func TestThrottleFetch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release open shard resource on dagstore close")
+	}
+
 	r := testRegistry(t)
 	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
 	require.NoError(t, err)
@@ -792,6 +817,8 @@ func TestThrottleFetch(t *testing.T) {
 	require.Len(t, m, 2) // only two shard states.
 	require.Len(t, m[ShardStateInitializing], 16-5)
 	require.Len(t, m[ShardStateAvailable], 5)
+
+	require.NoError(t, dagst.Close())
 }
 
 func TestIndexingFailure(t *testing.T) {
@@ -974,15 +1001,16 @@ func TestIndexingFailure(t *testing.T) {
 			require.NoError(t, res.Error)
 			require.Equal(t, k, res.Key)
 			require.NotNil(t, res.Accessor)
+			require.NoError(t, res.Accessor.Close())
 		}
 
-		evts := make([]Trace, 48)
+		evts := make([]Trace, 54)
 		n, timedOut := sink.Read(evts, 50*time.Millisecond)
 		require.False(t, timedOut)
-		require.Equal(t, 48, n)
+		require.Equal(t, 54, n)
 
-		// these 48 traces are OpShardRecover, OpShardFail.
-		for i := 0; i < 48; i++ {
+		// these 54 traces are OpShardRecover, OpShardMakeAvailable, OpShardAcquire and OpShardRelease.
+		for i := 0; i < 54; i++ {
 			evt := evts[i]
 			switch evt.Op {
 			case OpShardRecover:
@@ -994,11 +1022,16 @@ func TestIndexingFailure(t *testing.T) {
 			case OpShardAcquire:
 				require.EqualValues(t, ShardStateServing, evt.After.ShardState)
 				require.NoError(t, evt.After.Error)
+			case OpShardRelease:
+				require.EqualValues(t, ShardStateAvailable, evt.After.ShardState)
+				require.NoError(t, evt.After.Error)
 			default:
 				t.Fatalf("unexpected op: %s", evt.Op)
 			}
 		}
 	})
+
+	require.NoError(t, dagst.Close())
 }
 
 func TestFailureRecovery(t *testing.T) {
@@ -1218,7 +1251,6 @@ func TestRecoveryOnStart(t *testing.T) {
 		require.True(t, timedOut)
 		require.Equal(t, 16, n)
 
-		counts = map[OpType]int{}
 		for _, evt := range evts[:16] {
 			require.Equal(t, OpShardAcquire, evt.Op)
 		}
@@ -1337,9 +1369,12 @@ func TestTransientReusedOnRestart(t *testing.T) {
 	res = <-ch
 	require.NoError(t, res.Error)
 	require.NotNil(t, res.Accessor)
+	require.NoError(t, res.Accessor.Close())
 
 	// ensure that the count has not been incremented (i.e. the origin was not accessed)
 	require.Zero(t, dagst.shards[k].mount.TimesFetched())
+
+	require.NoError(t, dagst.Close())
 }
 
 func TestAcquireFailsWhenIndexGone(t *testing.T) {
@@ -1404,6 +1439,10 @@ func TestWaiterContextCancelled(t *testing.T) {
 }
 
 func TestAcquireContextCancelled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skip on Windows - TODO: release shard accessor on context cancellation")
+	}
+
 	r := testRegistry(t)
 	err := r.Register("block", newBlockingMount(&mount.FSMount{FS: testdata.FS}))
 	require.NoError(t, err)
@@ -1461,6 +1500,7 @@ func TestAcquireContextCancelled(t *testing.T) {
 	err = res.Accessor.Close()
 	require.NoError(t, err)
 
+	require.NoError(t, dagst.Close())
 }
 
 // registerShards registers n shards concurrently, using the CARv2 mount.
