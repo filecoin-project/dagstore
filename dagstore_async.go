@@ -102,7 +102,15 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	log.Debugw("acquire: successful; returning accessor", "shard", s.key)
 
 	// build the accessor.
-	sa, err := NewShardAccessor(reader, idx, s)
+	var readers []mount.Reader
+	for i := 0; i < 10; i++ {
+		reader, err := mnt.Fetch(ctx)
+		if err != nil {
+			panic(err)
+		}
+		readers = append(readers, reader)
+	}
+	sa, err := NewShardAccessor(readers, idx, s)
 
 	// send the shard accessor to the caller, adding a notifyDead function that
 	// will be called to release the shard if we were unable to deliver

@@ -2,8 +2,6 @@ package dagstore
 
 import (
 	"context"
-	"io"
-	"os"
 	"sync"
 
 	"github.com/filecoin-project/dagstore/mount"
@@ -11,8 +9,6 @@ import (
 
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
-	carv2 "github.com/ipld/go-car/v2"
-	"github.com/ipld/go-car/v2/blockstore"
 	"github.com/ipld/go-car/v2/index"
 
 	"golang.org/x/exp/mmap"
@@ -31,7 +27,7 @@ type ReadBlockstore interface {
 // ShardAccessor provides various means to access the data contained
 // in a shard.
 type ShardAccessor struct {
-	data  mount.Reader
+	data  []mount.Reader
 	idx   index.Index
 	shard *Shard
 
@@ -42,7 +38,7 @@ type ShardAccessor struct {
 	mmapr *mmap.ReaderAt
 }
 
-func NewShardAccessor(data mount.Reader, idx index.Index, s *Shard) (*ShardAccessor, error) {
+func NewShardAccessor(data []mount.Reader, idx index.Index, s *Shard) (*ShardAccessor, error) {
 	return &ShardAccessor{
 		data:  data,
 		idx:   idx,
@@ -55,39 +51,41 @@ func (sa *ShardAccessor) Shard() shard.Key {
 }
 
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
-	var r io.ReaderAt = sa.data
+	//var r io.ReaderAt = sa.data
 
-	sa.lk.Lock()
-	if f, ok := sa.data.(*os.File); ok {
-		if mmapr, err := mmap.Open(f.Name()); err != nil {
-			log.Warnf("failed to mmap reader of type %T: %s; using reader as-is", sa.data, err)
-		} else {
-			// we don't close the mount.Reader file descriptor because the user
-			// may have called other non-mmap-backed accessors.
-			r = mmapr
-			sa.mmapr = mmapr
-		}
-	}
-	sa.lk.Unlock()
+	//sa.lk.Lock()
+	//if f, ok := sa.data.(*os.File); ok {
+	//if mmapr, err := mmap.Open(f.Name()); err != nil {
+	//log.Warnf("failed to mmap reader of type %T: %s; using reader as-is", sa.data, err)
+	//} else {
+	//// we don't close the mount.Reader file descriptor because the user
+	//// may have called other non-mmap-backed accessors.
+	//r = mmapr
+	//sa.mmapr = mmapr
+	//}
+	//}
+	//sa.lk.Unlock()
 
-	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true))
+	bs, err := NewMultiBlockstore(sa.data, sa.idx)
+	//bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true))
 	return bs, err
 }
 
 // Close terminates this shard accessor, releasing any resources associated
 // with it, and decrementing internal refcounts.
 func (sa *ShardAccessor) Close() error {
-	if err := sa.data.Close(); err != nil {
-		log.Warnf("failed to close mount when closing shard accessor: %s", err)
-	}
-	sa.lk.Lock()
-	if sa.mmapr != nil {
-		if err := sa.mmapr.Close(); err != nil {
-			log.Warnf("failed to close mmap when closing shard accessor: %s", err)
-		}
-	}
-	sa.lk.Unlock()
+	return nil
+	//if err := sa.data.Close(); err != nil {
+	//log.Warnf("failed to close mount when closing shard accessor: %s", err)
+	//}
+	//sa.lk.Lock()
+	//if sa.mmapr != nil {
+	//if err := sa.mmapr.Close(); err != nil {
+	//log.Warnf("failed to close mmap when closing shard accessor: %s", err)
+	//}
+	//}
+	//sa.lk.Unlock()
 
-	tsk := &task{op: OpShardRelease, shard: sa.shard}
-	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
+	//tsk := &task{op: OpShardRelease, shard: sa.shard}
+	//return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
 }
