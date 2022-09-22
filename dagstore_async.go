@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/filecoin-project/dagstore/index"
+	logging "github.com/ipfs/go-log/v2"
 	trace "go.opentelemetry.io/otel/trace"
 
 	"github.com/ipld/go-car/v2"
@@ -17,6 +18,30 @@ import (
 // This file contains methods that are called from the event loop
 // but are run asynchronously in dedicated goroutines.
 //
+
+var rlog = logging.Logger("dagstore:rl")
+
+type readLogger struct {
+	mount.Reader
+}
+
+func (r *readLogger) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	rlog.Debugw("Read()", "slice-size", len(p), "n", n, "err", err)
+	return n, err
+}
+
+func (r *readLogger) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.Reader.ReadAt(p, off)
+	rlog.Debugw("ReadAt()", "slice-size", len(p), "offset", off, "n", n, "err", err)
+	return n, err
+}
+
+func (r *readLogger) Seek(offset int64, whence int) (int64, error) {
+	n, err := r.Reader.Seek(offset, whence)
+	rlog.Debugw("Seek()", "offset", offset, "whence", whence, "n", n, "err", err)
+	return n, err
+}
 
 // acquireAsync acquires a shard by fetching its data, obtaining its index, and
 // joining them to form a ShardAccessor.
@@ -59,6 +84,7 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 	}
 
 	log.Debugw("acquire: successfully fetched from mount upgrader", "shard", s.key)
+	reader = &readLogger{Reader: reader}
 
 	var span2 trace.Span
 	if d.tracer != nil {
@@ -130,6 +156,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	defer reader.Close()
 
 	log.Debugw("initialize: successfully fetched from mount upgrader", "shard", s.key)
+	reader = &readLogger{Reader: reader}
 
 	// works for both CARv1 and CARv2.
 	var idx carindex.Index
