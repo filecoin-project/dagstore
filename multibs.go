@@ -38,15 +38,15 @@ func (ms *MultiBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
 }
 
 func (ms *MultiBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) {
-	i := rand.Intn(10)
+	i := rand.Intn(len(ms.bs))
 
 	return ms.bs[i].Get(ctx, c)
 }
 
 func (ms *MultiBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
-	i := rand.Intn(10)
+	i := rand.Intn(len(ms.bs))
 
-	return ms.bs[i].Get(ctx, c)
+	return ms.bs[i].GetSize(ctx, c)
 }
 
 func (ms *MultiBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, error) {
