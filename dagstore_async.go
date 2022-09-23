@@ -2,6 +2,7 @@ package dagstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/filecoin-project/dagstore/index"
 	trace "go.opentelemetry.io/otel/trace"
@@ -17,6 +18,8 @@ import (
 // This file contains methods that are called from the event loop
 // but are run asynchronously in dedicated goroutines.
 //
+
+const readerPoolSize = 64
 
 // acquireAsync acquires a shard by fetching its data, obtaining its index, and
 // joining them to form a ShardAccessor.
@@ -101,15 +104,17 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, mnt mo
 
 	log.Debugw("acquire: successful; returning accessor", "shard", s.key)
 
+	start := time.Now()
 	// build the accessor.
 	var readers []mount.Reader
-	for i := 0; i < 10; i++ {
+	for i := 0; i < readerPoolSize; i++ {
 		reader, err := mnt.Fetch(ctx)
 		if err != nil {
 			panic(err)
 		}
 		readers = append(readers, reader)
 	}
+	log.Warnf("created readers", "time", time.Since(start), "count", readerPoolSize)
 	sa, err := NewShardAccessor(readers, idx, s)
 
 	// send the shard accessor to the caller, adding a notifyDead function that

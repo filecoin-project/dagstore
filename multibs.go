@@ -3,6 +3,7 @@ package dagstore
 import (
 	"context"
 	"math/rand"
+	"sync"
 
 	"github.com/filecoin-project/dagstore/mount"
 	blocks "github.com/ipfs/go-block-format"
@@ -15,7 +16,9 @@ import (
 // by the CARv2 indexed blockstore.
 type MultiBlockstore struct {
 	index index.Index
-	bs    []ReadBlockstore
+
+	bslk [readerPoolSize]sync.Mutex
+	bs   []ReadBlockstore
 }
 
 func NewMultiBlockstore(readers []mount.Reader, i index.Index) (*MultiBlockstore, error) {
@@ -40,12 +43,16 @@ func (ms *MultiBlockstore) Has(ctx context.Context, c cid.Cid) (bool, error) {
 func (ms *MultiBlockstore) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) {
 	i := rand.Intn(len(ms.bs))
 
+	ms.bslk[i].Lock()
+	defer ms.bslk[i].Unlock()
 	return ms.bs[i].Get(ctx, c)
 }
 
 func (ms *MultiBlockstore) GetSize(ctx context.Context, c cid.Cid) (int, error) {
 	i := rand.Intn(len(ms.bs))
 
+	ms.bslk[i].Lock()
+	defer ms.bslk[i].Unlock()
 	return ms.bs[i].GetSize(ctx, c)
 }
 
