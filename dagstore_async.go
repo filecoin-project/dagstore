@@ -19,7 +19,7 @@ import (
 // but are run asynchronously in dedicated goroutines.
 //
 
-const readerPoolSize = 64
+const readerPoolSize = 4
 
 // acquireAsync acquires a shard by fetching its data, obtaining its index, and
 // joining them to form a ShardAccessor.
