@@ -2,6 +2,7 @@ package dagstore
 
 import (
 	"context"
+	"errors"
 
 	"github.com/filecoin-project/dagstore/index"
 
@@ -33,12 +34,16 @@ func (d *DAGStore) acquireAsync(ctx context.Context, w *waiter, s *Shard, upmnt 
 
 	if err := ctx.Err(); err != nil {
 		log.Warnw("context cancelled while fetching shard; releasing", "shard", s.key, "error", err)
-
 		// release the shard to decrement the refcount that's incremented before `acquireAsync` is called.
 		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
-
 		// send the shard error to the caller for correctness
 		// since the context is cancelled, the result will be discarded.
+		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
+		return
+	}
+
+	if errors.Is(err, mount.ErrNotEnoughSpaceInTransientsDir) {
+		_ = d.queueTask(&task{op: OpShardRelease, shard: s}, d.completionCh)
 		d.dispatchResult(&ShardResult{Key: k, Error: err}, w)
 		return
 	}
@@ -117,6 +122,11 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	reader, err := mnt.Fetch(ctx)
 	if err != nil {
 		log.Warnw("initialize: failed to fetch from mount upgrader", "shard", s.key, "error", err)
+
+		if cerr := ctx.Err(); cerr != nil || (errors.Is(err, mount.ErrNotEnoughSpaceInTransientsDir)) {
+			_ = d.failShardWithTransientError(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
+			return
+		}
 
 		_ = d.failShard(s, d.completionCh, "failed to acquire reader of mount on initialization: %w", err)
 		return

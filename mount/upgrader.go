@@ -456,18 +456,18 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 	}
 	transientSizeKnown := toReserve != 0
 
+	from, err := underlying.Fetch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch underlying mount: %w", err)
+	}
+	defer from.Close()
+
 	// create the destination file we need to download the mount contents to.
 	dst, err := os.Create(outpath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer dst.Close()
-
-	from, err := underlying.Fetch(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch underlying mount: %w", err)
-	}
-	defer from.Close()
 
 	// reserveWithBackoff attempts to make a reservation with the allocator using back-off retry mechanism
 	// in case of a failue.

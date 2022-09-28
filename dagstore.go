@@ -179,9 +179,10 @@ type task struct {
 	reservationReq *reservationReq
 	releaseReq     *releaseReq
 	*waiter
-	op    OpType
-	shard *Shard
-	err   error
+	op               OpType
+	shard            *Shard
+	err              error
+	isTransientError bool
 }
 
 // ShardResult encapsulates a result from an asynchronous operation.
@@ -780,6 +781,11 @@ func ensureDir(path string) error {
 func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
 	err := fmt.Errorf(format, args...)
 	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
+}
+
+func (d *DAGStore) failShardWithTransientError(s *Shard, ch chan *task, format string, args ...interface{}) error {
+	err := fmt.Errorf(format, args...)
+	return d.queueTask(&task{isTransientError: true, op: OpShardFail, shard: s, err: err}, ch)
 }
 
 func (d *DAGStore) transientDirSize() (int64, error) {

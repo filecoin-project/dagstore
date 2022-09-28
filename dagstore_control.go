@@ -176,6 +176,10 @@ func (d *DAGStore) control() {
 					// recovery that may be blocking other acquirers with longer
 					// contexts.
 					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
+				} else if s.isTransientError {
+					// schedule shard recovery as the shard failed with a transient error.
+					s.wAcquire = append(s.wAcquire, w)
+					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
 				} else {
 					err := fmt.Errorf("shard is in errored state; err: %w", s.err)
 					res := &ShardResult{Key: s.key, Error: err}
@@ -233,6 +237,7 @@ func (d *DAGStore) control() {
 			s.state = ShardStateErrored
 			s.transientSize = 0
 			s.err = tsk.err
+			s.isTransientError = tsk.isTransientError
 
 			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {

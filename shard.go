@@ -47,6 +47,7 @@ type Shard struct {
 	err           error      // persisted in PersistedShard.Error; populated if shard state is errored.
 	transientSize int64      // persisted in PersistedShard; size of the transient on a successful fetch from a remote Mount.
 
+	isTransientError     bool
 	recoverOnNextAcquire bool // a shard marked in error state during initialization can be recovered on its first acquire.
 
 	fetchOnNextAcquire bool // a shard marked in initialising state during dag store startup can be fetched on its first acquire.
