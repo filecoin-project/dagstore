@@ -50,6 +50,15 @@ const (
 	RecoverNow
 )
 
+// FetchOnStartPolicy specifies the policy that determines if a registered shard
+// whose index is absent should be fetched on start.
+type FetchOnStartPolicy int
+
+const (
+	FetchNow FetchOnStartPolicy = iota
+	FetchOnAcquire
+)
+
 var log = logging.Logger("dagstore")
 
 var (
@@ -163,6 +172,7 @@ type reservationResp struct {
 
 type releaseReq struct {
 	release int64
+	doneCh  chan struct{}
 }
 
 // Task represents an operation to be performed on a shard or the DAG store.
@@ -170,9 +180,10 @@ type task struct {
 	reservationReq *reservationReq
 	releaseReq     *releaseReq
 	*waiter
-	op    OpType
-	shard *Shard
-	err   error
+	op               OpType
+	shard            *Shard
+	err              error
+	isTransientError bool
 }
 
 // ShardResult encapsulates a result from an asynchronous operation.
@@ -262,6 +273,8 @@ type Config struct {
 
 	// AutomatedGCConfig specifies the confguration parameters to use for the Automated GC.
 	AutomatedGCConfig *AutomatedGCConfig
+
+	FetchOnStart FetchOnStartPolicy
 }
 
 // NewDAGStore constructs a new DAG store with the supplied configuration.
@@ -353,6 +366,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		if dagst.maxTransientDirSize <= dagst.defaultReservationSize {
 			dagst.defaultReservationSize = dagst.maxTransientDirSize / 10
 		}
+		log.Info("default dagstore space reservation size is", dagst.defaultReservationSize)
 	}
 
 	var err error
@@ -432,6 +446,10 @@ func (d *DAGStore) Start(ctx context.Context) error {
 			if istat, err := d.indices.StatFullIndex(s.key); err == nil && istat.Exists {
 				s.state = ShardStateAvailable
 			} else {
+				if d.config.FetchOnStart == FetchOnAcquire {
+					s.fetchOnNextAcquire = true
+				}
+
 				// reset back to new, and queue the OpShardRegister.
 				s.state = ShardStateNew
 				toRegister = append(toRegister, s)
@@ -460,14 +478,29 @@ func (d *DAGStore) Start(ctx context.Context) error {
 		go d.dispatcher(d.dispatchFailuresCh)
 	}
 
+	queueTask := func(tsk *task, ch chan<- *task) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-d.ctx.Done():
+			return d.ctx.Err()
+		case ch <- tsk:
+			return nil
+		}
+	}
+
 	// release the queued registrations before we return.
 	for _, s := range toRegister {
-		_ = d.queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
+		if err := queueTask(&task{op: OpShardRegister, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
+			return fmt.Errorf("failed to queue task for shard %s: %w", s.key, err)
+		}
 	}
 
 	// queue shard recovery for shards in the errored state before we return.
 	for _, s := range toRecover {
-		_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh)
+		if err := queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: ctx}}, d.externalCh); err != nil {
+			return fmt.Errorf("failed to queue task for shard %s: %w", s.key, err)
+		}
 	}
 
 	return nil
@@ -565,6 +598,9 @@ func (d *DAGStore) DestroyShard(ctx context.Context, key shard.Key, out chan Sha
 }
 
 type AcquireOpts struct {
+	// NoDownload can be supplied when acquiring a shard to indicate that the shard should only be acquired if the transient
+	// already exists and does not need to be downloaded from a mount that does not support random access.
+	NoDownload bool
 }
 
 // AcquireShard acquires access to the specified shard, and returns a
@@ -577,7 +613,7 @@ type AcquireOpts struct {
 // This method returns an error synchronously if preliminary validation fails.
 // Otherwise, it queues the shard for acquisition. The caller should monitor
 // supplied channel for a result.
-func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, _ AcquireOpts) error {
+func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan ShardResult, opts AcquireOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
 	if !ok {
@@ -586,7 +622,7 @@ func (d *DAGStore) AcquireShard(ctx context.Context, key shard.Key, out chan Sha
 	}
 	d.lk.Unlock()
 
-	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out}}
+	tsk := &task{op: OpShardAcquire, shard: s, waiter: &waiter{ctx: ctx, outCh: out, noDownload: opts.NoDownload}}
 	return d.queueTask(tsk, d.externalCh)
 }
 
@@ -747,6 +783,11 @@ func ensureDir(path string) error {
 func (d *DAGStore) failShard(s *Shard, ch chan *task, format string, args ...interface{}) error {
 	err := fmt.Errorf(format, args...)
 	return d.queueTask(&task{op: OpShardFail, shard: s, err: err}, ch)
+}
+
+func (d *DAGStore) failShardWithTransientError(s *Shard, ch chan *task, format string, args ...interface{}) error {
+	err := fmt.Errorf(format, args...)
+	return d.queueTask(&task{isTransientError: true, op: OpShardFail, shard: s, err: err}, ch)
 }
 
 func (d *DAGStore) transientDirSize() (int64, error) {

@@ -30,7 +30,7 @@ var (
 	minReservationBackOff  = 5 * time.Second // minimum backoff time before making a new reservation attempt
 	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt
 	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests
-	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up
+	maxReservationAttempts = 1               // maximum number of reservation attempts to make before giving up
 
 	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
 	// for a transient because we do not have enough space in the transients directory.
@@ -136,6 +136,35 @@ func Upgrade(underlying Mount, throttler throttle.Throttler, rootdir, key string
 	}
 
 	return ret, nil
+}
+
+func (u *Upgrader) FetchNoDownload(ctx context.Context) (Reader, error) {
+	if u.passthrough {
+		log.Debugw("fully capable mount; fetching from underlying", "shard", u.key)
+		return u.underlying.Fetch(ctx)
+	}
+
+	// return a reader if the transient is still alive, otherwise return an error.
+	u.lk.Lock()
+	defer u.lk.Unlock()
+
+	if !u.ready {
+		return nil, ErrTransientNotFound
+	}
+
+	log.Debugw("transient local copy exists; check liveness", "shard", u.key, "path", u.path)
+	var err error
+	if _, err = os.Stat(u.path); err == nil {
+		log.Debugw("transient copy alive; not refetching", "shard", u.key, "path", u.path)
+		return os.Open(u.path)
+	}
+	u.ready = false
+	log.Debugw("transient copy dead; removing and refetching", "shard", u.key, "path", u.path, "error", err)
+	if err := os.Remove(u.path); err != nil {
+		log.Warnw("refetch: failed to remove transient; garbage left behind", "shard", u.key, "dead_path", u.path, "error", err)
+	}
+
+	return nil, ErrTransientNotFound
 }
 
 func (u *Upgrader) Fetch(ctx context.Context) (Reader, error) {
@@ -427,17 +456,18 @@ func (r *ReservationGatedDownloader) Download(ctx context.Context, underlying Mo
 	}
 	transientSizeKnown := toReserve != 0
 
+	from, err := underlying.Fetch(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch underlying mount: %w", err)
+	}
+	defer from.Close()
+
 	// create the destination file we need to download the mount contents to.
 	dst, err := os.Create(outpath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer dst.Close()
-
-	from, err := underlying.Fetch(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch underlying mount: %w", err)
-	}
 
 	// reserveWithBackoff attempts to make a reservation with the allocator using back-off retry mechanism
 	// in case of a failue.
@@ -574,7 +604,7 @@ func downloadNBytes(ctx context.Context, rd Reader, n int64, out *os.File) (hasM
 			return false, nil
 		}
 		if rerr != nil {
-			return false, fmt.Errorf("error while reading from the underlying mount: %w", err)
+			return false, fmt.Errorf("error while reading from the underlying mount: %w", rerr)
 		}
 	}
 }

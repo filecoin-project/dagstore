@@ -381,6 +381,38 @@ func TestUpgraderFetchAndCopyThrottle(t *testing.T) {
 	}
 }
 
+func TestUpgraderNoDownload(t *testing.T) {
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	key := fmt.Sprintf("%d", rand.Uint64())
+	mnt := &FSMount{testdata.FS, testdata.FSPathCarV2}
+	u, err := Upgrade(mnt, throttle.Noop(), rootDir, key, "", &SimpleDownloader{})
+	require.NoError(t, err)
+
+	// fetch and download
+	rd, err := u.Fetch(ctx)
+	require.NotEmpty(t, rd)
+	require.NoError(t, err)
+	bz1, err := ioutil.ReadAll(rd)
+	require.NoError(t, err)
+
+	// can fetch
+	rd, err = u.FetchNoDownload(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, rd)
+	bz2, err := ioutil.ReadAll(rd)
+	require.NoError(t, err)
+	require.EqualValues(t, bz1, bz2)
+
+	_, err = u.DeleteTransient()
+	require.NoError(t, err)
+
+	// should now error out after transient is deleted
+	rd, err = u.FetchNoDownload(ctx)
+	require.EqualValues(t, ErrTransientNotFound, err)
+	require.Empty(t, rd)
+}
+
 type blockingReader struct {
 	r     io.Reader
 	lk    sync.Mutex

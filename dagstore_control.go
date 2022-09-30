@@ -98,6 +98,12 @@ func (d *DAGStore) control() {
 				break
 			}
 
+			// skip init if this was a restart and we should fetch the shard on the next acquire
+			if s.fetchOnNextAcquire {
+				log.Infow("shard registered with lazy initialization", "shard", s.key)
+				break
+			}
+
 			// otherwise, park the registration channel and queue the init.
 			s.wRegister = tsk.waiter
 			_ = d.queueTask(&task{op: OpShardInitialize, shard: s, waiter: tsk.waiter}, d.internalCh)
@@ -119,7 +125,6 @@ func (d *DAGStore) control() {
 			// or when recovering from a failure.
 
 			s.state = ShardStateAvailable
-
 			st, err := s.mount.Stat(d.ctx)
 			if err != nil {
 				log.Errorw("failed to stat transient", "shard", s.key, "error", err)
@@ -150,13 +155,13 @@ func (d *DAGStore) control() {
 				// optimistically increment the refcount to acquire the shard. The go-routine will send an `OpShardRelease` message
 				// to the event loop if it fails to acquire the shard.
 				s.refs++
-				go d.acquireAsync(w.ctx, w, s, s.mount)
+				go d.acquireAsync(w.ctx, w, s, s.mount, w.noDownload)
 			}
 			s.wAcquire = s.wAcquire[:0]
 
 		case OpShardAcquire:
 			log.Debugw("got request to acquire shard", "shard", s.key, "current shard state", s.state)
-			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh}
+			w := &waiter{ctx: tsk.ctx, outCh: tsk.outCh, noDownload: tsk.noDownload}
 
 			// if the shard is errored, fail the acquire immediately.
 			if s.state == ShardStateErrored {
@@ -169,6 +174,10 @@ func (d *DAGStore) control() {
 					// to avoid the first context cancellation interrupting the
 					// recovery that may be blocking other acquirers with longer
 					// contexts.
+					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
+				} else if s.isTransientError {
+					// schedule shard recovery as the shard failed with a transient error.
+					s.wAcquire = append(s.wAcquire, w)
 					_ = d.queueTask(&task{op: OpShardRecover, shard: s, waiter: &waiter{ctx: d.ctx}}, d.internalCh)
 				} else {
 					err := fmt.Errorf("shard is in errored state; err: %w", s.err)
@@ -206,7 +215,7 @@ func (d *DAGStore) control() {
 			// The goroutine will send an `OpShardRelease` task
 			// to the event loop if it fails to acquire the shard.
 			s.refs++
-			go d.acquireAsync(tsk.ctx, w, s, s.mount)
+			go d.acquireAsync(tsk.ctx, w, s, s.mount, w.noDownload)
 
 		case OpShardRelease:
 			if (s.state != ShardStateServing && s.state != ShardStateErrored) || s.refs <= 0 {
@@ -227,6 +236,7 @@ func (d *DAGStore) control() {
 			s.state = ShardStateErrored
 			s.transientSize = 0
 			s.err = tsk.err
+			s.isTransientError = tsk.isTransientError
 
 			// notify the registration waiter, if there is one.
 			if s.wRegister != nil {
@@ -367,11 +377,13 @@ func (d *DAGStore) control() {
 		case OpShardReleaseTransientReservation:
 			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {
 				// sanity check failed
+				log.Warnw("releasing for illegal shard state", "shard", s.key, "state", s.state, "torelease", tsk.releaseReq.release)
 				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'serving' or `initialising` or `recovering` "+
 					"state; was: %s", ErrShardIllegalReservationRequest, s.state)
 				break
 			}
 			d.totalTransientDirSize -= tsk.releaseReq.release
+			tsk.releaseReq.doneCh <- struct{}{}
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
@@ -488,7 +500,7 @@ func (t *transientAllocator) Reserve(ctx context.Context, key shard.Key, nPrevRe
 	}
 }
 
-func (t *transientAllocator) Release(_ context.Context, key shard.Key, release int64) error {
+func (t *transientAllocator) Release(ctx context.Context, key shard.Key, release int64) error {
 	t.d.lk.Lock()
 	s, ok := t.d.shards[key]
 	if !ok {
@@ -497,8 +509,18 @@ func (t *transientAllocator) Release(_ context.Context, key shard.Key, release i
 	}
 	t.d.lk.Unlock()
 
+	doneCh := make(chan struct{}, 1)
 	tsk := &task{op: OpShardReleaseTransientReservation, shard: s,
-		releaseReq: &releaseReq{release: release}}
+		releaseReq: &releaseReq{release: release, doneCh: doneCh}}
 
-	return t.d.queueTask(tsk, t.d.completionCh)
+	if err := t.d.queueTask(tsk, t.d.completionCh); err != nil {
+		return fmt.Errorf("failed to queue release task: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-doneCh:
+	}
+	return nil
 }

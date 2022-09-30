@@ -14,6 +14,7 @@ type waiter struct {
 	ctx        context.Context    // governs the op if it's external
 	outCh      chan<- ShardResult // to send back the result
 	notifyDead func()             // called when the context expired and we weren't able to deliver the result
+	noDownload bool               // do not download the transient it it does not already exist
 }
 
 func (w waiter) deliver(res *ShardResult) {
@@ -46,7 +47,10 @@ type Shard struct {
 	err           error      // persisted in PersistedShard.Error; populated if shard state is errored.
 	transientSize int64      // persisted in PersistedShard; size of the transient on a successful fetch from a remote Mount.
 
+	isTransientError     bool
 	recoverOnNextAcquire bool // a shard marked in error state during initialization can be recovered on its first acquire.
+
+	fetchOnNextAcquire bool // a shard marked in initialising state during dag store startup can be fetched on its first acquire.
 
 	// Waiters.
 	wRegister *waiter   // waiter for registration result.
