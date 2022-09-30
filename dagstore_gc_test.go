@@ -97,14 +97,20 @@ func TestDagstoreAutomatedGCConcurrent(t *testing.T) {
 	assertTransientsSize(t, dagst, 0)
 
 	// register 10 shards
-	keys := registerShards(t, dagst, 10, carv2mnt, RegisterOpts{})
+	keys := registerShards(t, dagst, 10, carv2mnt, RegisterOpts{ReservationOpts: []mount.ReservationGatedDownloaderOpt{
+		mount.ReservationBackOffRetryOpt(100*time.Millisecond, 300*time.Millisecond, 2, 10),
+	}})
 
 	// acquire 2 shards -> so these will never be evicted
 	acquireShard(t, dagst, keys[0], 1)
 	acquireShard(t, dagst, keys[1], 1)
 
 	// register 10 more shards -> works
-	keyset2 := registerShardsWithKeyPrefix(t, dagst, 10, carv2mnt, "test-", 20, RegisterOpts{})
+	keyset2 := registerShardsWithKeyPrefix(t, dagst, 10, carv2mnt, "test-", 20, RegisterOpts{
+		ReservationOpts: []mount.ReservationGatedDownloaderOpt{
+			mount.ReservationBackOffRetryOpt(100*time.Millisecond, 300*time.Millisecond, 2, 10),
+		},
+	})
 
 	// assert exactly 10 shards were evicted
 	evicted := assertExactlyNEvictedAndMaxDirSize(t, sink, 10, maxTransientSize)
@@ -130,7 +136,9 @@ func TestDagstoreAutomatedGCConcurrentRegisterAboveSize(t *testing.T) {
 		err = dagst.Start(context.Background())
 		require.NoError(t, err)
 
-		registerShards(t, dagst, n, carv2mnt, RegisterOpts{})
+		registerShards(t, dagst, n, carv2mnt, RegisterOpts{ReservationOpts: []mount.ReservationGatedDownloaderOpt{
+			mount.ReservationBackOffRetryOpt(100*time.Millisecond, 300*time.Millisecond, 2, 10),
+		}})
 
 		// assert transient dir size never goes up above maximum size
 		assertDirSizeConstraint(t, sink, maxTransientSize)

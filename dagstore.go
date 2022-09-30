@@ -172,6 +172,7 @@ type reservationResp struct {
 
 type releaseReq struct {
 	release int64
+	doneCh  chan struct{}
 }
 
 // Task represents an operation to be performed on a shard or the DAG store.
@@ -365,6 +366,7 @@ func NewDAGStore(cfg Config) (*DAGStore, error) {
 		if dagst.maxTransientDirSize <= dagst.defaultReservationSize {
 			dagst.defaultReservationSize = dagst.maxTransientDirSize / 10
 		}
+		log.Info("default dagstore space reservation size is", dagst.defaultReservationSize)
 	}
 
 	var err error

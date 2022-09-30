@@ -30,7 +30,7 @@ var (
 	minReservationBackOff  = 5 * time.Second // minimum backoff time before making a new reservation attempt
 	maxReservationBackOff  = 1 * time.Minute //  maximum backoff time before making a new reservation attempt
 	factor                 = 1.5             // factor by which to increase the backoff time between reservation requests
-	maxReservationAttempts = 7               // maximum number of reservation attempts to make before giving up
+	maxReservationAttempts = 1               // maximum number of reservation attempts to make before giving up
 
 	// ErrNotEnoughSpaceInTransientsDir is returned when we are unable to allocate a requested reservation
 	// for a transient because we do not have enough space in the transients directory.

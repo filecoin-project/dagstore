@@ -125,7 +125,6 @@ func (d *DAGStore) control() {
 			// or when recovering from a failure.
 
 			s.state = ShardStateAvailable
-
 			st, err := s.mount.Stat(d.ctx)
 			if err != nil {
 				log.Errorw("failed to stat transient", "shard", s.key, "error", err)
@@ -378,11 +377,13 @@ func (d *DAGStore) control() {
 		case OpShardReleaseTransientReservation:
 			if s.state != ShardStateServing && s.state != ShardStateInitializing && s.state != ShardStateRecovering {
 				// sanity check failed
+				log.Warnw("releasing for illegal shard state", "shard", s.key, "state", s.state, "torelease", tsk.releaseReq.release)
 				_ = d.failShard(s, d.internalCh, "%w: expected shard to be in 'serving' or `initialising` or `recovering` "+
 					"state; was: %s", ErrShardIllegalReservationRequest, s.state)
 				break
 			}
 			d.totalTransientDirSize -= tsk.releaseReq.release
+			tsk.releaseReq.doneCh <- struct{}{}
 
 		default:
 			panic(fmt.Sprintf("unrecognized shard operation: %d", tsk.op))
@@ -499,7 +500,7 @@ func (t *transientAllocator) Reserve(ctx context.Context, key shard.Key, nPrevRe
 	}
 }
 
-func (t *transientAllocator) Release(_ context.Context, key shard.Key, release int64) error {
+func (t *transientAllocator) Release(ctx context.Context, key shard.Key, release int64) error {
 	t.d.lk.Lock()
 	s, ok := t.d.shards[key]
 	if !ok {
@@ -508,8 +509,18 @@ func (t *transientAllocator) Release(_ context.Context, key shard.Key, release i
 	}
 	t.d.lk.Unlock()
 
+	doneCh := make(chan struct{}, 1)
 	tsk := &task{op: OpShardReleaseTransientReservation, shard: s,
-		releaseReq: &releaseReq{release: release}}
+		releaseReq: &releaseReq{release: release, doneCh: doneCh}}
 
-	return t.d.queueTask(tsk, t.d.completionCh)
+	if err := t.d.queueTask(tsk, t.d.completionCh); err != nil {
+		return fmt.Errorf("failed to queue release task: %w", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-doneCh:
+	}
+	return nil
 }
