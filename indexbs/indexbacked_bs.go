@@ -180,7 +180,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 			// thread was waiting to enter the sync.Once
 			val, ok := ro.blockstoreCache.Get(sk)
 			if ok {
-				return val.(dagstore.ReadBlockstore), nil
+				return val.(*accessorWithBlockstore).bs, nil
 			}
 
 			// Acquire the blockstore for the selected shard

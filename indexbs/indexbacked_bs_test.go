@@ -3,6 +3,7 @@ package indexbs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"golang.org/x/sync/errgroup"
@@ -26,7 +27,7 @@ var noOpSelector = func(c cid.Cid, shards []shard.Key) (shard.Key, error) {
 
 var carv2mnt = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
 
-func TestReadOnlyBs(t *testing.T) {
+func TestIndexBackedBlockstore(t *testing.T) {
 	ctx := context.Background()
 	store := dssync.MutexWrap(datastore.NewMapDatastore())
 	dagst, err := dagstore.NewDAGStore(dagstore.Config{
@@ -179,6 +180,104 @@ func TestReadOnlyBs(t *testing.T) {
 	sz, err := rbs.GetSize(ctx, notFoundCid)
 	require.ErrorIs(t, err, ErrBlockNotFound)
 	require.EqualValues(t, 0, sz)
+}
+
+func TestIndexBackedBlockstoreFuzz(t *testing.T) {
+	ctx := context.Background()
+	store := dssync.MutexWrap(datastore.NewMapDatastore())
+	dagst, err := dagstore.NewDAGStore(dagstore.Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: t.TempDir(),
+		Datastore:     store,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	// register some shards
+	var sks []shard.Key
+	for i := 0; i < 10; i++ {
+		ch := make(chan dagstore.ShardResult, 1)
+		sk := shard.KeyFromString(fmt.Sprintf("test%d", i))
+		err = dagst.RegisterShard(context.Background(), sk, carv2mnt, ch, dagstore.RegisterOpts{})
+		require.NoError(t, err)
+		res := <-ch
+		require.NoError(t, res.Error)
+		sks = append(sks, sk)
+	}
+
+	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10)
+	require.NoError(t, err)
+
+	var errg errgroup.Group
+	for _, sk := range sks {
+		sk := sk
+		errg.Go(func() error {
+			it, err := dagst.GetIterableIndex(sk)
+			if err != nil {
+				return err
+			}
+
+			var skerrg errgroup.Group
+			for i := 0; i < 10; i++ {
+				it.ForEach(func(mh multihash.Multihash, _ uint64) error {
+					mhs := mh
+					skerrg.Go(func() error {
+						c := cid.NewCidV1(cid.Raw, mhs)
+
+						errs := make(chan error, 3)
+						go func() {
+							has, err := rbs.Has(ctx, c)
+							if err != nil {
+								errs <- err
+							}
+							if has {
+								errs <- nil
+							} else {
+								errs <- errors.New("has should be true")
+							}
+						}()
+
+						go func() {
+							blk, err := rbs.Get(ctx, c)
+							if err != nil {
+								errs <- err
+							}
+							if blk == nil {
+								errs <- errors.New("block should not be empty")
+								return
+							}
+
+							// ensure cids match
+							if blk.Cid() != c {
+								errs <- errors.New("cid mismatch")
+								return
+							}
+							errs <- nil
+						}()
+
+						go func() {
+							_, err = rbs.GetSize(ctx, c)
+							errs <- err
+						}()
+
+						for i := 0; i < 3; i++ {
+							err := <-errs
+							if err != nil {
+								return err
+							}
+						}
+						return nil
+					})
+
+					return nil
+				})
+			}
+			return skerrg.Wait()
+		})
+	}
+	require.NoError(t, errg.Wait())
 }
 
 func testRegistry(t *testing.T) *mount.Registry {
