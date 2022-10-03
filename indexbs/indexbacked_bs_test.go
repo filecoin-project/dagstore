@@ -197,7 +197,7 @@ func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 
 	// register some shards
 	var sks []shard.Key
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 3; i++ {
 		ch := make(chan dagstore.ShardResult, 1)
 		sk := shard.KeyFromString(fmt.Sprintf("test%d", i))
 		err = dagst.RegisterShard(context.Background(), sk, carv2mnt, ch, dagstore.RegisterOpts{})
@@ -219,62 +219,51 @@ func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 				return err
 			}
 
-			var skerrg errgroup.Group
-			for i := 0; i < 10; i++ {
+			for i := 0; i < 3; i++ {
+				var skerrg errgroup.Group
 				it.ForEach(func(mh multihash.Multihash, _ uint64) error {
 					mhs := mh
+					c := cid.NewCidV1(cid.Raw, mhs)
 					skerrg.Go(func() error {
-						c := cid.NewCidV1(cid.Raw, mhs)
-
-						errs := make(chan error, 3)
-						go func() {
-							has, err := rbs.Has(ctx, c)
-							if err != nil {
-								errs <- err
-							}
-							if has {
-								errs <- nil
-							} else {
-								errs <- errors.New("has should be true")
-							}
-						}()
-
-						go func() {
-							blk, err := rbs.Get(ctx, c)
-							if err != nil {
-								errs <- err
-							}
-							if blk == nil {
-								errs <- errors.New("block should not be empty")
-								return
-							}
-
-							// ensure cids match
-							if blk.Cid() != c {
-								errs <- errors.New("cid mismatch")
-								return
-							}
-							errs <- nil
-						}()
-
-						go func() {
-							_, err = rbs.GetSize(ctx, c)
-							errs <- err
-						}()
-
-						for i := 0; i < 3; i++ {
-							err := <-errs
-							if err != nil {
-								return err
-							}
+						has, err := rbs.Has(ctx, c)
+						if err != nil {
+							return err
+						}
+						if !has {
+							return errors.New("has should be true")
 						}
 						return nil
 					})
 
+					skerrg.Go(func() error {
+						blk, err := rbs.Get(ctx, c)
+						if err != nil {
+							return err
+						}
+						if blk == nil {
+							return errors.New("block should not be empty")
+						}
+
+						// ensure cids match
+						if blk.Cid() != c {
+							return errors.New("cid mismatch")
+						}
+						return nil
+					})
+
+					skerrg.Go(func() error {
+						_, err := rbs.GetSize(ctx, c)
+						return err
+					})
+
 					return nil
 				})
+				err := skerrg.Wait()
+				if err != nil {
+					return err
+				}
 			}
-			return skerrg.Wait()
+			return nil
 		})
 	}
 	require.NoError(t, errg.Wait())
