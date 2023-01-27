@@ -50,7 +50,7 @@ type IndexBackedBlockstore struct {
 	// i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
 	blockstoreCache *lru.Cache
 	// used to manage concurrent acquisition of shards by multiple threads
-	bsAcquireByShard sync.Map
+	stripedLock [256]sync.Mutex
 }
 
 func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
@@ -169,59 +169,57 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 
 	// Some retrieval patterns will result in multiple threads fetching blocks
 	// from the same piece concurrently. In that case many threads may attempt
-	// to create a blockstore over the same piece. Use a sync.Once to ensure
+	// to create a blockstore over the same piece. Use a striped lock to ensure
 	// that the blockstore is only created once for all threads waiting on the
 	// same shard.
-	bsAcquireI, _ := ro.bsAcquireByShard.LoadOrStore(sk, &blockstoreAcquire{})
-	bsAcquire := bsAcquireI.(*blockstoreAcquire)
-	bsAcquire.once.Do(func() {
-		bsAcquire.bs, bsAcquire.err = func() (dagstore.ReadBlockstore, error) {
-			// Check if the blockstore was created by another thread while this
-			// thread was waiting to enter the sync.Once
-			val, ok := ro.blockstoreCache.Get(sk)
-			if ok {
-				return val.(*accessorWithBlockstore).bs, nil
+	bs, err := func() (dagstore.ReadBlockstore, error) {
+		// Derive the striped lock index from the shard key and acquire the lock
+		skstr := sk.String()
+		lockIdx := skstr[len(skstr)-1]
+		ro.stripedLock[lockIdx].Lock()
+		defer ro.stripedLock[lockIdx].Unlock()
+
+		// Check if the blockstore was created by another thread while this
+		// thread was waiting to enter the lock
+		val, ok := ro.blockstoreCache.Get(sk)
+		if ok {
+			return val.(*accessorWithBlockstore).bs, nil
+		}
+
+		// Acquire the blockstore for the selected shard
+		resch := make(chan dagstore.ShardResult, 1)
+		if err := ro.d.AcquireShard(ro.ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
+			return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
+		}
+		var shres dagstore.ShardResult
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case shres = <-resch:
+			if shres.Error != nil {
+				return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, shres.Error)
 			}
+		}
 
-			// Acquire the blockstore for the selected shard
-			resch := make(chan dagstore.ShardResult, 1)
-			if err := ro.d.AcquireShard(ro.ctx, sk, resch, dagstore.AcquireOpts{}); err != nil {
-				return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, err)
-			}
-			var shres dagstore.ShardResult
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case shres = <-resch:
-				if shres.Error != nil {
-					return nil, fmt.Errorf("failed to acquire shard %s: %w", sk, shres.Error)
-				}
-			}
+		sa := shres.Accessor
+		bs, err := sa.Blockstore()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load read-only blockstore for shard %s: %w", sk, err)
+		}
 
-			sa := shres.Accessor
-			bs, err := sa.Blockstore()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load read-only blockstore for shard %s: %w", sk, err)
-			}
+		// Add the blockstore to the cache
+		ro.blockstoreCache.Add(sk, &accessorWithBlockstore{sa, bs})
 
-			// Add the blockstore to the cache
-			ro.blockstoreCache.Add(sk, &accessorWithBlockstore{sa, bs})
+		logbs.Debugw("Added new blockstore to cache", "cid", c, "shard", sk)
 
-			logbs.Debugw("Added new blockstore to cache", "cid", c, "shard", sk)
-
-			return bs, nil
-		}()
-
-		// The sync.Once has completed so clean up the acquire entry for this shard
-		ro.bsAcquireByShard.Delete(sk)
-	})
-
-	if bsAcquire.err != nil {
-		return nil, bsAcquire.err
+		return bs, nil
+	}()
+	if err != nil {
+		return nil, err
 	}
 
 	// Call the operation on the blockstore
-	return execOpOnBlockstore(ctx, c, sk, bsAcquire.bs, op)
+	return execOpOnBlockstore(ctx, c, sk, bs, op)
 }
 
 func execOpOnBlockstore(ctx context.Context, c cid.Cid, sk shard.Key, bs dagstore.ReadBlockstore, op BlockstoreOp) (*opRes, error) {
