@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"testing"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -184,6 +186,7 @@ func TestIndexBackedBlockstore(t *testing.T) {
 
 func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 	ctx := context.Background()
+	tempdir := t.TempDir()
 	store := dssync.MutexWrap(datastore.NewMapDatastore())
 	dagst, err := dagstore.NewDAGStore(dagstore.Config{
 		MountRegistry: testRegistry(t),
@@ -197,17 +200,26 @@ func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 
 	// register some shards
 	var sks []shard.Key
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 10; i++ {
 		ch := make(chan dagstore.ShardResult, 1)
 		sk := shard.KeyFromString(fmt.Sprintf("test%d", i))
-		err = dagst.RegisterShard(context.Background(), sk, carv2mnt, ch, dagstore.RegisterOpts{})
+
+		rseed := time.Now().Nanosecond()
+		randomFilepath, err := testdata.CreateRandomFile(tempdir, rseed, 256*1024)
+		require.NoError(t, err)
+		_, carFilepath, err := testdata.CreateDenseCARv2(tempdir, randomFilepath)
+		require.NoError(t, err)
+		carBytes, err := ioutil.ReadFile(carFilepath)
+		require.NoError(t, err)
+		mnt := &mount.BytesMount{Bytes: carBytes}
+		err = dagst.RegisterShard(context.Background(), sk, mnt, ch, dagstore.RegisterOpts{})
 		require.NoError(t, err)
 		res := <-ch
 		require.NoError(t, res.Error)
 		sks = append(sks, sk)
 	}
 
-	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10)
+	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 3)
 	require.NoError(t, err)
 
 	var errg errgroup.Group
@@ -219,7 +231,7 @@ func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 				return err
 			}
 
-			for i := 0; i < 3; i++ {
+			for i := 0; i < 10; i++ {
 				var skerrg errgroup.Group
 				it.ForEach(func(mh multihash.Multihash, _ uint64) error {
 					mhs := mh
