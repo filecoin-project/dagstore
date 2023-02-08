@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/filecoin-project/dagstore"
+	lru "github.com/filecoin-project/dagstore/indexbs/lru"
 	"github.com/filecoin-project/dagstore/shard"
-	lru "github.com/hashicorp/golang-lru"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
@@ -53,9 +54,9 @@ type IndexBackedBlockstore struct {
 	stripedLock [256]sync.Mutex
 }
 
-func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int) (blockstore.Blockstore, error) {
+func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int, cacheExpire time.Duration) (blockstore.Blockstore, error) {
 	// instantiate the blockstore cache
-	bslru, err := lru.NewWithEvict(maxCacheSize, func(_ interface{}, val interface{}) {
+	bslru, err := lru.NewWithExpire(maxCacheSize, cacheExpire, func(_ interface{}, val interface{}) {
 		// Ensure we close the blockstore for a shard when it's evicted from
 		// the cache so dagstore can gc it.
 		// TODO: add reference counting mechanism so that the blockstore does
