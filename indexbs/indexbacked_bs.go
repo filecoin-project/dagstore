@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/filecoin-project/dagstore"
-	lru "github.com/filecoin-project/dagstore/indexbs/lru"
 	"github.com/filecoin-project/dagstore/shard"
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-datastore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/jellydator/ttlcache/v2"
 )
 
 var logbs = logging.Logger("dagstore/idxbs")
@@ -49,14 +49,16 @@ type IndexBackedBlockstore struct {
 
 	// caches the blockstore for a given shard for shard read affinity
 	// i.e. further reads will likely be from the same shard. Maps (shard key -> blockstore).
-	blockstoreCache *lru.Cache
+	blockstoreCache *ttlcache.Cache
 	// used to manage concurrent acquisition of shards by multiple threads
 	stripedLock [256]sync.Mutex
 }
 
 func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int, cacheExpire time.Duration) (blockstore.Blockstore, error) {
-	// instantiate the blockstore cache
-	bslru, err := lru.NewWithExpire(maxCacheSize, cacheExpire, func(_ interface{}, val interface{}) {
+	cache := ttlcache.NewCache()
+	cache.SetTTL(cacheExpire)
+	cache.SetCacheSizeLimit(maxCacheSize)
+	cache.SetExpirationReasonCallback(func(_ string, _ ttlcache.EvictionReason, val interface{}) {
 		// Ensure we close the blockstore for a shard when it's evicted from
 		// the cache so dagstore can gc it.
 		// TODO: add reference counting mechanism so that the blockstore does
@@ -64,15 +66,12 @@ func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSe
 		abs := val.(*accessorWithBlockstore)
 		abs.sa.Close()
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lru cache for read only blockstores")
-	}
 
 	return &IndexBackedBlockstore{
 		ctx:             ctx,
 		d:               d,
 		shardSelectF:    shardSelector,
-		blockstoreCache: bslru,
+		blockstoreCache: cache,
 	}, nil
 }
 
@@ -141,16 +140,17 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 	// If so, call op on the cached blockstore.
 	for _, sk := range shards {
 		// Get the shard's blockstore from the cache
-		val, ok := ro.blockstoreCache.Get(sk)
-		if ok {
+		val, err := ro.blockstoreCache.Get(sk.String())
+		if err != nil {
+			continue
+		}
+
+		if val != nil {
 			accessor := val.(*accessorWithBlockstore)
 			res, err := execOpOnBlockstore(ctx, c, sk, accessor.bs, op)
 			if err != nil {
 				return nil, err
 			}
-
-			// Found a cached blockstore containing the required block,
-			// and successfully called the blockstore op
 			return res, nil
 		}
 	}
@@ -182,8 +182,8 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 
 		// Check if the blockstore was created by another thread while this
 		// thread was waiting to enter the lock
-		val, ok := ro.blockstoreCache.Get(sk)
-		if ok {
+		val, err := ro.blockstoreCache.Get(sk.String())
+		if err == nil && val != nil {
 			return val.(*accessorWithBlockstore).bs, nil
 		}
 
@@ -209,7 +209,7 @@ func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op Block
 		}
 
 		// Add the blockstore to the cache
-		ro.blockstoreCache.Add(sk, &accessorWithBlockstore{sa, bs})
+		ro.blockstoreCache.Set(sk.String(), &accessorWithBlockstore{sa, bs})
 
 		logbs.Debugw("Added new blockstore to cache", "cid", c, "shard", sk)
 
