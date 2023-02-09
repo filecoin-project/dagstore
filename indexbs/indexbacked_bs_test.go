@@ -50,7 +50,7 @@ func TestIndexBackedBlockstore(t *testing.T) {
 	res := <-ch
 	require.NoError(t, res.Error)
 
-	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10)
+	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10, time.Minute)
 	require.NoError(t, err)
 
 	// iterate over the CARV2 Index for the given CARv2 file and ensure the readonly blockstore
@@ -111,7 +111,7 @@ func TestIndexBackedBlockstore(t *testing.T) {
 		return shard.Key{}, rejectedErr
 	}
 
-	rbs, err = NewIndexBackedBlockstore(ctx, dagst, fss, 10)
+	rbs, err = NewIndexBackedBlockstore(ctx, dagst, fss, 10, time.Minute)
 	require.NoError(t, err)
 	it.ForEach(func(mh multihash.Multihash, u uint64) error {
 		c := cid.NewCidV1(cid.Raw, mh)
@@ -137,7 +137,7 @@ func TestIndexBackedBlockstore(t *testing.T) {
 		return shard.Key{}, ErrNoShardSelected
 	}
 
-	rbs, err = NewIndexBackedBlockstore(ctx, dagst, fss, 10)
+	rbs, err = NewIndexBackedBlockstore(ctx, dagst, fss, 10, time.Minute)
 	require.NoError(t, err)
 	it.ForEach(func(mh multihash.Multihash, u uint64) error {
 		c := cid.NewCidV1(cid.Raw, mh)
@@ -165,7 +165,7 @@ func TestIndexBackedBlockstore(t *testing.T) {
 	notFoundCid, err := cid.Parse("bafzbeigai3eoy2ccc7ybwjfz5r3rdxqrinwi4rwytly24tdbh6yk7zslrm")
 	require.NoError(t, err)
 
-	rbs, err = NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10)
+	rbs, err = NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 10, time.Minute)
 	require.NoError(t, err)
 
 	// Has should return false
@@ -219,7 +219,7 @@ func TestIndexBackedBlockstoreFuzz(t *testing.T) {
 		sks = append(sks, sk)
 	}
 
-	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 3)
+	rbs, err := NewIndexBackedBlockstore(ctx, dagst, noOpSelector, 3, time.Minute)
 	require.NoError(t, err)
 
 	var errg errgroup.Group
