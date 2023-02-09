@@ -15,15 +15,15 @@ require (
 	github.com/ipfs/go-ipfs-exchange-offline v0.3.0
 	github.com/ipfs/go-ipfs-files v0.0.3
 	github.com/ipfs/go-ipld-format v0.3.0
-	github.com/ipfs/go-log/v2 v2.3.0
-	github.com/ipfs/go-merkledag v0.6.0
+	github.com/ipfs/go-log/v2 v2.5.1
+	github.com/ipfs/go-merkledag v0.8.1
 	github.com/ipfs/go-unixfs v0.3.1
 	github.com/ipld/go-car/v2 v2.4.1
 	github.com/jellydator/ttlcache/v2 v2.11.1
 	github.com/libp2p/go-libp2p-core v0.9.0 // indirect
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multicodec v0.5.0
-	github.com/multiformats/go-multihash v0.1.0
+	github.com/multiformats/go-multihash v0.2.1
 	github.com/stretchr/testify v1.7.1
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/whyrusleeping/cbor-gen v0.0.0-20200123233031-1cdf64d27158
