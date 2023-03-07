@@ -35,16 +35,15 @@ type accessorWithBlockstore struct {
 	bs dagstore.ReadBlockstore
 }
 
-type blockstoreAcquire struct {
-	once sync.Once
-	bs   dagstore.ReadBlockstore
-	err  error
+type IdxBstoreDagstore interface {
+	ShardsContainingCid(ctx context.Context, c cid.Cid) ([]shard.Key, error)
+	AcquireShard(ctx context.Context, key shard.Key, out chan dagstore.ShardResult, _ dagstore.AcquireOpts) error
 }
 
 // IndexBackedBlockstore is a read only blockstore over all cids across all shards in the dagstore.
 type IndexBackedBlockstore struct {
 	ctx          context.Context
-	d            dagstore.Interface
+	d            IdxBstoreDagstore
 	shardSelectF ShardSelectorF
 
 	// caches the blockstore for a given shard for shard read affinity
@@ -54,7 +53,7 @@ type IndexBackedBlockstore struct {
 	stripedLock [256]sync.Mutex
 }
 
-func NewIndexBackedBlockstore(ctx context.Context, d dagstore.Interface, shardSelector ShardSelectorF, maxCacheSize int, cacheExpire time.Duration) (blockstore.Blockstore, error) {
+func NewIndexBackedBlockstore(ctx context.Context, d IdxBstoreDagstore, shardSelector ShardSelectorF, maxCacheSize int, cacheExpire time.Duration) (blockstore.Blockstore, error) {
 	cache := ttlcache.NewCache()
 	cache.SetTTL(cacheExpire)
 	cache.SetCacheSizeLimit(maxCacheSize)
@@ -124,7 +123,7 @@ func (ro *IndexBackedBlockstore) execOpWithLogs(ctx context.Context, c cid.Cid, 
 
 func (ro *IndexBackedBlockstore) execOp(ctx context.Context, c cid.Cid, op BlockstoreOp) (*opRes, error) {
 	// Fetch all the shards containing the multihash
-	shards, err := ro.d.ShardsContainingMultihash(ctx, c.Hash())
+	shards, err := ro.d.ShardsContainingCid(ctx, c)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, ErrBlockNotFound
@@ -242,7 +241,7 @@ func (ro *IndexBackedBlockstore) Has(ctx context.Context, c cid.Cid) (bool, erro
 	logbs.Debugw("Has", "cid", c)
 
 	// Get shards that contain the cid's hash
-	shards, err := ro.d.ShardsContainingMultihash(ctx, c.Hash())
+	shards, err := ro.d.ShardsContainingCid(ctx, c)
 	if err != nil {
 		logbs.Debugw("Has error", "cid", c, "err", err)
 		return false, nil
@@ -282,4 +281,14 @@ func (ro *IndexBackedBlockstore) PutMany(context.Context, []blocks.Block) error 
 }
 func (ro *IndexBackedBlockstore) AllKeysChan(ctx context.Context) (<-chan cid.Cid, error) {
 	return nil, errors.New("unsupported operation AllKeysChan")
+}
+
+type IdxBstoreDagstoreFromDagstore struct {
+	dagstore.Interface
+}
+
+var _ IdxBstoreDagstore = (*IdxBstoreDagstoreFromDagstore)(nil)
+
+func (d *IdxBstoreDagstoreFromDagstore) ShardsContainingCid(ctx context.Context, c cid.Cid) ([]shard.Key, error) {
+	return d.Interface.ShardsContainingMultihash(ctx, c.Hash())
 }
