@@ -158,7 +158,7 @@ func TestRegisterUsingExistingTransient(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 	})
 	require.NoError(t, err)
 
@@ -185,7 +185,7 @@ func TestRegisterWithaNilResponseChannel(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 	})
 	require.NoError(t, err)
 
@@ -220,7 +220,7 @@ func TestRegisterCarV1(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 	})
 	require.NoError(t, err)
 
@@ -255,7 +255,7 @@ func TestRegisterCarV2(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     datastore.NewMapDatastore(),
+		Datastore:     NewDsPersistStore(datastore.NewMapDatastore()),
 	})
 	require.NoError(t, err)
 
@@ -310,7 +310,7 @@ func TestRegisterConcurrentShards(t *testing.T) {
 		dagst, err := NewDAGStore(Config{
 			MountRegistry: testRegistry(t),
 			TransientsDir: t.TempDir(),
-			Datastore:     store,
+			Datastore:     NewDsPersistStore(store),
 		})
 		require.NoError(t, err)
 
@@ -332,7 +332,7 @@ func TestAcquireInexistentShard(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     datastore.NewMapDatastore(),
+		Datastore:     NewDsPersistStore(datastore.NewMapDatastore()),
 	})
 	require.NoError(t, err)
 
@@ -349,7 +349,7 @@ func TestAcquireAfterRegisterWait(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: t.TempDir(),
-		Datastore:     datastore.NewMapDatastore(),
+		Datastore:     NewDsPersistStore(datastore.NewMapDatastore()),
 	})
 	require.NoError(t, err)
 
@@ -425,7 +425,7 @@ func TestRestartRestoresState(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
-		Datastore:     store,
+		Datastore:     NewDsPersistStore(store),
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestRestartRestoresState(t *testing.T) {
 	dagst, err = NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
-		Datastore:     store,
+		Datastore:     NewDsPersistStore(store),
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
@@ -495,7 +495,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: r,
 		TransientsDir: dir,
-		Datastore:     store,
+		Datastore:     NewDsPersistStore(store),
 		TraceCh:       sink,
 	})
 	require.NoError(t, err)
@@ -551,7 +551,7 @@ func TestRestartResumesRegistration(t *testing.T) {
 	dagst, err = NewDAGStore(Config{
 		MountRegistry: r,
 		TransientsDir: dir,
-		Datastore:     store,
+		Datastore:     NewDsPersistStore(store),
 		TraceCh:       sink,
 	})
 	require.NoError(t, err)
@@ -685,7 +685,7 @@ func TestLazyInitialization(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: testRegistry(t),
 		TransientsDir: dir,
-		Datastore:     store,
+		Datastore:     NewDsPersistStore(store),
 		TraceCh:       sink,
 	})
 	require.NoError(t, err)
@@ -1065,7 +1065,7 @@ func TestRecoveryOnStart(t *testing.T) {
 		TransientsDir: dir,
 		TraceCh:       sink,
 		FailureCh:     failures,
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 	}
 	dagst, err := NewDAGStore(config)
 	require.NoError(t, err)
@@ -1293,7 +1293,7 @@ func TestTransientReusedOnRestart(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: r,
 		TransientsDir: dir,
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
@@ -1317,7 +1317,7 @@ func TestTransientReusedOnRestart(t *testing.T) {
 	dagst, err = NewDAGStore(Config{
 		MountRegistry: r,
 		TransientsDir: dir,
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)
@@ -1350,7 +1350,7 @@ func TestAcquireFailsWhenIndexGone(t *testing.T) {
 	dagst, err := NewDAGStore(Config{
 		MountRegistry: r,
 		TransientsDir: dir,
-		Datastore:     ds,
+		Datastore:     NewDsPersistStore(ds),
 		IndexRepo:     idx,
 	})
 	require.NoError(t, err)

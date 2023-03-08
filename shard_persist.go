@@ -10,6 +10,8 @@ import (
 	"github.com/filecoin-project/dagstore/mount"
 	"github.com/filecoin-project/dagstore/shard"
 	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/namespace"
+	"github.com/ipfs/go-datastore/query"
 )
 
 // PersistedShard is the persistent representation of the Shard.
@@ -22,13 +24,83 @@ type PersistedShard struct {
 	Error         string     `json:"e"`
 }
 
-// MarshalJSON returns a serialized representation of the state. It must be
-// called with a shard lock (read, at least), such as from inside the event
-// loop, as it accesses mutable state.
-func (s *Shard) MarshalJSON() ([]byte, error) {
+type PersistStore interface {
+	Save(context.Context, PersistedShard) error
+	Get(context.Context, shard.Key) (*PersistedShard, error)
+	List(context.Context) ([]*PersistedShard, error)
+	Close(context.Context) error
+}
+
+var _ PersistStore = (*DsPersistStore)(nil)
+
+type DsPersistStore struct {
+	store ds.Datastore
+}
+
+func NewDsPersistStore(ds ds.Batching) PersistStore {
+	// namespace all store operations.
+	return &DsPersistStore{namespace.Wrap(ds, StoreNamespace)}
+}
+
+func (dsPersistStore *DsPersistStore) Save(ctx context.Context, ps PersistedShard) error {
+	psBytes, err := json.Marshal(ps)
+	if err != nil {
+		return fmt.Errorf("failed to serialize shard state: %w", err)
+	}
+	// assuming that the datastore is namespaced if need be.
+	k := ds.NewKey(ps.Key)
+	if err := dsPersistStore.store.Put(ctx, k, psBytes); err != nil {
+		return fmt.Errorf("failed to put shard state: %w", err)
+	}
+	if err := dsPersistStore.store.Sync(ctx, ds.Key{}); err != nil {
+		return fmt.Errorf("failed to sync shard state to store: %w", err)
+	}
+	return nil
+}
+
+func (dsPersistStore *DsPersistStore) Get(ctx context.Context, key shard.Key) (*PersistedShard, error) {
+	k := ds.NewKey(key.String())
+	shardBytes, err := dsPersistStore.store.Get(ctx, k)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get shard of key %s %w", key, err)
+	}
+	s := &PersistedShard{}
+	if err := json.Unmarshal(shardBytes, s); err != nil {
+		return nil, fmt.Errorf("unable to unmarshal shard %w", err)
+	}
+	return s, nil
+}
+
+func (dsPersistStore *DsPersistStore) List(ctx context.Context) ([]*PersistedShard, error) {
+	queryResults, err := dsPersistStore.store.Query(ctx, query.Query{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to recover dagstore state from store: %w", err)
+	}
+	var result []*PersistedShard
+	for {
+		res, ok := queryResults.NextSync()
+		if !ok {
+			return result, nil
+		}
+		s := &PersistedShard{}
+		if err := json.Unmarshal(res.Value, s); err != nil {
+			log.Warnf("failed to load shard %s: %s; skipping", shard.KeyFromString(res.Key), err)
+			continue
+		}
+		result = append(result, s)
+	}
+}
+
+func (dsPersistStore *DsPersistStore) Close(ctx context.Context) error {
+	return dsPersistStore.store.Sync(ctx, ds.Key{})
+}
+
+// persist persists the shard's state into the supplied Datastore. It calls
+// MarshalJSON, which requires holding a shard lock to be safe.
+func (s *Shard) persist(ctx context.Context, store PersistStore) error {
 	u, err := s.d.mounts.Represent(s.mount)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode mount: %w", err)
+		return fmt.Errorf("failed to encode mount: %w", err)
 	}
 	ps := PersistedShard{
 		Key:           s.key.String(),
@@ -40,22 +112,11 @@ func (s *Shard) MarshalJSON() ([]byte, error) {
 	if s.err != nil {
 		ps.Error = s.err.Error()
 	}
-
-	return json.Marshal(ps)
-	// TODO maybe switch to CBOR, as it's probably faster.
-	// var b bytes.Buffer
-	// if err := ps.MarshalCBOR(&b); err != nil {
-	// 	return nil, err
-	// }
-	// return b.Bytes(), nil
+	return store.Save(ctx, ps)
 }
 
-func (s *Shard) UnmarshalJSON(b []byte) error {
-	var ps PersistedShard // TODO try to avoid this alloc by marshalling/unmarshalling directly.
-	if err := json.Unmarshal(b, &ps); err != nil {
-		return err
-	}
-
+func fromPersistedShard(ctx context.Context, d *DAGStore, ps *PersistedShard) (*Shard, error) {
+	s := &Shard{d: d}
 	// restore basics.
 	s.key = shard.KeyFromString(ps.Key)
 	s.state = ps.State
@@ -67,34 +128,15 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	// restore mount.
 	u, err := url.Parse(ps.URL)
 	if err != nil {
-		return fmt.Errorf("failed to parse mount URL: %w", err)
+		return nil, fmt.Errorf("failed to parse mount URL: %w", err)
 	}
 	mnt, err := s.d.mounts.Instantiate(u)
 	if err != nil {
-		return fmt.Errorf("failed to instantiate mount from URL: %w", err)
+		return nil, fmt.Errorf("failed to instantiate mount from URL: %w", err)
 	}
 	s.mount, err = mount.Upgrade(mnt, s.d.throttleReaadyFetch, s.d.config.TransientsDir, s.key.String(), ps.TransientPath)
 	if err != nil {
-		return fmt.Errorf("failed to apply mount upgrader: %w", err)
+		return nil, fmt.Errorf("failed to apply mount upgrader: %w", err)
 	}
-
-	return nil
-}
-
-// persist persists the shard's state into the supplied Datastore. It calls
-// MarshalJSON, which requires holding a shard lock to be safe.
-func (s *Shard) persist(ctx context.Context, store ds.Datastore) error {
-	ps, err := s.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("failed to serialize shard state: %w", err)
-	}
-	// assuming that the datastore is namespaced if need be.
-	k := ds.NewKey(s.key.String())
-	if err := store.Put(ctx, k, ps); err != nil {
-		return fmt.Errorf("failed to put shard state: %w", err)
-	}
-	if err := store.Sync(ctx, ds.Key{}); err != nil {
-		return fmt.Errorf("failed to sync shard state to store: %w", err)
-	}
-	return nil
+	return s, nil
 }
