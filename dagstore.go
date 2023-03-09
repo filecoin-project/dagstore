@@ -460,7 +460,8 @@ type RecoverOpts struct {
 // will be notified when it completes.
 //
 // TODO add an operation identifier to ShardResult -- starts to look like
-//  a Trace event?
+//
+//	a Trace event?
 func (d *DAGStore) RecoverShard(ctx context.Context, key shard.Key, out chan ShardResult, _ RecoverOpts) error {
 	d.lk.Lock()
 	s, ok := d.shards[key]
