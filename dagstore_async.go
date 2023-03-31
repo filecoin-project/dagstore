@@ -202,6 +202,10 @@ func (d *DAGStore) parseShardWithDataSegmentIndex(ctx context.Context, sKey shar
 		return nil, fmt.Errorf("could not calculate valid entries: %w", err)
 	}
 
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("no data segments found")
+	}
+
 	finalIdx := carindex.NewInsertionIndex()
 	for _, s := range segments {
 		segOffset := s.UnpaddedOffest()
@@ -213,9 +217,9 @@ func (d *DAGStore) parseShardWithDataSegmentIndex(ctx context.Context, sKey shar
 			lr := io.NewSectionReader(r, int64(segOffset), int64(segSize))
 			idx, err = car.ReadOrGenerateIndex(lr, car.ZeroLengthSectionAsEOF(true), car.StoreIdentityCIDs(true))
 			if err == nil {
-				log.Debugw("initialize: finished generating index for shard", "shard", sKey)
+				log.Debugw("initialize: finished generating index for shard", "shard", sKey, "segment", s.Offset)
 			} else {
-				log.Warnw("initialize: failed to generate index for shard", "shard", sKey, "error", err)
+				log.Warnw("initialize: failed to generate index for shard", "shard", sKey, "segment", s.Offset, "error", err)
 			}
 			return err
 		})
