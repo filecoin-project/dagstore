@@ -2,6 +2,7 @@ package dagstore
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -54,28 +55,44 @@ func (sa *ShardAccessor) Shard() shard.Key {
 	return sa.shard.key
 }
 
-func (sa *ShardAccessor) Read(p []byte) (int, error) {
-	return sa.data.Read(p)
+// Reader returns an io.Reader that can be used to read the data from the shard.
+func (sa *ShardAccessor) Reader() io.Reader {
+	return &readerAtWrapper{
+		readerAt: sa.tryMmap(),
+	}
 }
 
 func (sa *ShardAccessor) Blockstore() (ReadBlockstore, error) {
-	var r io.ReaderAt = sa.data
+	r := sa.tryMmap()
+	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true))
+	return bs, err
+}
 
+// tryMmap attempts to mmap the file if the underlying data is an *os.File. It returns an
+// io.ReaderAt which can be used to read the data. If the operation was successful or the file is
+// already mapped , it will return the mmap.ReaderAt. If the memory mapping fails, it falls back to
+// the original io.ReaderAt implementation from the mount.Reader and logs a warning message.
+// The method is safe for concurrent use.
+func (sa *ShardAccessor) tryMmap() io.ReaderAt {
 	sa.lk.Lock()
+	defer sa.lk.Unlock()
+
+	if sa.mmapr != nil {
+		return sa.mmapr
+	}
+
 	if f, ok := sa.data.(*os.File); ok {
 		if mmapr, err := mmap.Open(f.Name()); err != nil {
 			log.Warnf("failed to mmap reader of type %T: %s; using reader as-is", sa.data, err)
 		} else {
 			// we don't close the mount.Reader file descriptor because the user
 			// may have called other non-mmap-backed accessors.
-			r = mmapr
 			sa.mmapr = mmapr
+			return mmapr
 		}
 	}
-	sa.lk.Unlock()
 
-	bs, err := blockstore.NewReadOnly(r, sa.idx, carv2.ZeroLengthSectionAsEOF(true))
-	return bs, err
+	return sa.data
 }
 
 // Close terminates this shard accessor, releasing any resources associated
@@ -94,4 +111,20 @@ func (sa *ShardAccessor) Close() error {
 
 	tsk := &task{op: OpShardRelease, shard: sa.shard}
 	return sa.shard.d.queueTask(tsk, sa.shard.d.externalCh)
+}
+
+// readerAtWrapper is a wrapper around an io.ReaderAt that implements io.Reader.
+type readerAtWrapper struct {
+	readerAt   io.ReaderAt
+	readOffset int64
+}
+
+func (w *readerAtWrapper) Read(p []byte) (n int, err error) {
+	n, err = w.readerAt.ReadAt(p, w.readOffset)
+	w.readOffset += int64(n)
+	if err != nil && err != io.EOF {
+		return n, fmt.Errorf("readerAtWrapper: error reading from the underlying ReaderAt: %w", err)
+	}
+
+	return n, err
 }
