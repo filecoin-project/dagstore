@@ -36,7 +36,7 @@ func TestFileMount(t *testing.T) {
 	require.EqualValues(t, size, stat.Size)
 
 	// check URL.
-	require.Equal(t, mnt.Path, mnt.Serialize().Host)
+	require.Equal(t, mnt.Path, mnt.Serialize().Path)
 
 	info := mnt.Info()
 	require.True(t, info.AccessSequential && info.AccessSeek && info.AccessRandom) // all flags true

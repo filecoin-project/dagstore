@@ -39,15 +39,15 @@ func (f *FileMount) Stat(_ context.Context) (Stat, error) {
 
 func (f *FileMount) Serialize() *url.URL {
 	return &url.URL{
-		Host: f.Path,
+		Path: f.Path,
 	}
 }
 
 func (f *FileMount) Deserialize(u *url.URL) error {
-	if u.Host == "" {
+	if u.Path == "" {
 		return fmt.Errorf("invalid host")
 	}
-	f.Path = u.Host
+	f.Path = u.Path
 	return nil
 }
 
