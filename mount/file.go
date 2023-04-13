@@ -45,7 +45,7 @@ func (f *FileMount) Serialize() *url.URL {
 
 func (f *FileMount) Deserialize(u *url.URL) error {
 	if u.Path == "" {
-		return fmt.Errorf("invalid host")
+		return fmt.Errorf("invalid path")
 	}
 	f.Path = u.Path
 	return nil
