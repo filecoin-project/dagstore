@@ -278,7 +278,8 @@ func (u *Upgrader) DeleteTransient() error {
 
 	// refuse to delete the transient if it's not being managed by us (i.e. in
 	// our transients root directory).
-	if _, err := filepath.Rel(u.rootdir, u.path); err != nil {
+	if rel, err := filepath.Rel(u.rootdir, u.path); err != nil ||
+		(len(rel) > 3 && rel[0:3] == ".."+string(filepath.Separator)) {
 		log.Debugw("transient is not owned by us; nothing to remove", "shard", u.key)
 		return nil
 	}
