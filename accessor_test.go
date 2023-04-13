@@ -2,6 +2,7 @@ package dagstore
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,6 +81,90 @@ func TestMmap(t *testing.T) {
 
 		// not mmapped any longer, in no case
 		checkMmapped(t, false, name)
+	}
+
+	// macOS vmmap shows /Users/USER/*/sample-wrapped-v2.car instead of the
+	// full path, probably hidden for privacy reasons. So let's match only
+	// by filename.
+	carv2name := filepath.Base(testdata.RootPathCarV2)
+
+	t.Run("bytes-nommap", func(t *testing.T) {
+		// BytesMount doesn't return an *os.File, therefore it's not mmappable.
+		mnt := &mount.BytesMount{Bytes: testdata.CarV2}
+
+		run(t, mnt, false, carv2name)
+	})
+
+	t.Run("file-mmap", func(t *testing.T) {
+		// FileMount does return an *os.File, therefore it's mmappable.
+		mnt := &mount.FileMount{Path: testdata.RootPathCarV2}
+		run(t, mnt, true, carv2name)
+	})
+
+	t.Run("upgrader-mmap", func(t *testing.T) {
+		// An upgraded FS mount will mmap its local transient.
+		var mnt mount.Mount = &mount.FSMount{FS: testdata.FS, Path: testdata.FSPathCarV2}
+		tempdir := t.TempDir()
+
+		var err error
+		mnt, err = mount.Upgrade(mnt, throttle.Noop(), tempdir, "foo", "")
+		require.NoError(t, err)
+
+		// warm up the upgrader so a transient is created, and we can obtain
+		// its path to test against the mmap query output.
+		reader, err := mnt.Fetch(context.Background())
+		require.NoError(t, err)
+		err = reader.Close()
+		require.NoError(t, err)
+
+		// in this case, the file we expect to see mmapped is the transient.
+		name := filepath.Base(mnt.(*mount.Upgrader).TransientPath())
+		run(t, mnt, true, name)
+	})
+
+}
+
+// TestReaderFactory tests that a ShardAccessor correctly creates independent readers from both mmap
+// backed and non-mmap backed mount readers. It is based on TestMmap.
+func TestReaderFactory(t *testing.T) {
+	run := func(t *testing.T, mnt mount.Mount, expect bool, name string) {
+		accessor := createAccessor(t, mnt)
+		defer accessor.Close()
+
+		// the readers haven't been created, so the shard shouldn't be mmapped.
+		checkMmapped(t, false, name)
+
+		var readers []io.Reader
+		for i := 0; i < 3; i++ {
+			reader := accessor.Reader()
+			require.NotNil(t, reader)
+			readers = append(readers, reader)
+		}
+
+		// the readers should be mmaped, even if the blockstore hasn't been called
+		checkMmapped(t, expect, name)
+
+		firstFullRead, err := io.ReadAll(readers[0])
+		require.NoError(t, err)
+
+		// reading data from the second reader shouldn't be affected by the first reader.
+		someBytes := make([]byte, 10)
+		_, err = readers[1].Read(someBytes)
+		require.NoError(t, err)
+		require.Equal(t, someBytes, firstFullRead[:10])
+
+		secondFullRead, err := io.ReadAll(readers[2])
+		require.NoError(t, err)
+		require.Equal(t, secondFullRead, firstFullRead)
+
+		// reading a second time should read the next bytes correctly (see readerAtWrapper)
+		moreBytes := make([]byte, 10)
+		_, err = readers[1].Read(moreBytes)
+		require.NoError(t, err)
+		require.Equal(t, moreBytes, firstFullRead[10:20])
+
+		err = accessor.Close()
+		require.NoError(t, err)
 	}
 
 	// macOS vmmap shows /Users/USER/*/sample-wrapped-v2.car instead of the
