@@ -5,7 +5,6 @@ import (
 
 	"github.com/filecoin-project/dagstore/index"
 
-	"github.com/ipld/go-car/v2"
 	carindex "github.com/ipld/go-car/v2/index"
 	"github.com/multiformats/go-multihash"
 
@@ -120,7 +119,7 @@ func (d *DAGStore) initializeShard(ctx context.Context, s *Shard, mnt mount.Moun
 	var idx carindex.Index
 	err = d.throttleIndex.Do(ctx, func(_ context.Context) error {
 		var err error
-		idx, err = car.ReadOrGenerateIndex(reader, car.ZeroLengthSectionAsEOF(true), car.StoreIdentityCIDs(true))
+		idx, err = d.indexer(ctx, s.key, reader)
 		if err == nil {
 			log.Debugw("initialize: finished generating index for shard", "shard", s.key)
 		} else {
