@@ -65,10 +65,20 @@ func (s *Shard) UnmarshalJSON(b []byte) error {
 	}
 
 	// restore mount.
-	u, err := url.Parse(ps.URL)
+	// URL should do QueryUnescape first.
+	urlStr, err := url.QueryUnescape(ps.URL)
+	if err != nil {
+		return fmt.Errorf("failed to query unescape URL : %w", err)
+	}
+	u, err := url.Parse(urlStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse mount URL: %w", err)
 	}
+
+	if u.Host == "" {
+		u.Host = u.Path
+	}
+
 	mnt, err := s.d.mounts.Instantiate(u)
 	if err != nil {
 		return fmt.Errorf("failed to instantiate mount from URL: %w", err)
