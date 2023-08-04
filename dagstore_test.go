@@ -96,6 +96,63 @@ func TestDestroyShard(t *testing.T) {
 	require.Equal(t, 1, len(info))
 }
 
+func TestDestroyAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := datastore.NewLogDatastore(dssync.MutexWrap(datastore.NewMapDatastore()), "trace")
+	idx, err := index.NewFSRepo(t.TempDir())
+	require.NoError(t, err)
+
+	dagst, err := NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+		Datastore:     store,
+		IndexRepo:     idx,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	keys := registerShards(t, dagst, 100, carv2mnt, RegisterOpts{})
+
+	res, err := store.Query(context.TODO(), dsq.Query{})
+	require.NoError(t, err)
+	entries, err := res.Rest()
+	require.NoError(t, err)
+	require.Len(t, entries, 100) // we have 100 shards.
+
+	// Remove 20 shards
+	for _, j := range keys[20:40] {
+		desres := make(chan ShardResult, 1)
+		err = dagst.DestroyShard(context.Background(), j, desres, DestroyOpts{})
+		require.NoError(t, err)
+		res := <-desres
+		require.NoError(t, res.Error)
+	}
+
+	// close the DAG store.
+	err = dagst.Close()
+	require.NoError(t, err)
+
+	// create a new dagstore with the same datastore.
+	dagst, err = NewDAGStore(Config{
+		MountRegistry: testRegistry(t),
+		TransientsDir: dir,
+		Datastore:     store,
+		IndexRepo:     idx,
+	})
+	require.NoError(t, err)
+
+	err = dagst.Start(context.Background())
+	require.NoError(t, err)
+
+	// Compare the number of shards after restart
+	info := dagst.AllShardsInfo()
+	l := len(info)
+	t.Log(l)
+	require.Len(t, info, 80)
+}
+
 func TestRegisterUsingExistingTransient(t *testing.T) {
 	ds := datastore.NewMapDatastore()
 	dagst, err := NewDAGStore(Config{
