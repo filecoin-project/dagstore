@@ -519,6 +519,17 @@ func (d *DAGStore) GetShardInfo(k shard.Key) (ShardInfo, error) {
 	return info, nil
 }
 
+func (d *DAGStore) Stats() map[ShardState]int {
+	d.lk.RLock()
+	defer d.lk.RUnlock()
+
+	stats := make(map[ShardState]int)
+	for _, s := range d.shards {
+		stats[s.state]++
+	}
+	return stats
+}
+
 type AllShardsInfo map[shard.Key]ShardInfo
 
 // AllShardsInfo returns the current state of all registered shards, as well as
